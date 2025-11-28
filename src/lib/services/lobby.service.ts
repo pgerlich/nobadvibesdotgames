@@ -1,7 +1,5 @@
-import { v4 as uuidv4 } from 'uuid';
-import redis, { REDIS_KEYS, REDIS_TTL } from '../redis';
-import prisma from '../db';
-import { GameStatus } from '@prisma/client';
+import prisma from "../db";
+import redis, { REDIS_KEYS, REDIS_TTL } from "../redis";
 
 export interface LobbyPlayer {
   id: string; // Player ID from database
@@ -17,12 +15,12 @@ export interface LobbyState {
   gameId: string; // Database game ID
   hostId: string;
   hostSocketId: string;
-  status: 'waiting' | 'playing' | 'voting' | 'guessing' | 'finished';
+  status: "waiting" | "playing" | "voting" | "guessing" | "finished";
   gameType: string;
   maxPlayers: number;
   minPlayers: number;
   createdAt: number;
-  
+
   // Game-specific state (for active games)
   category?: string;
   secretWord?: string;
@@ -35,7 +33,7 @@ export interface LobbyState {
 }
 
 class LobbyService {
-  private readonly CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+  private readonly CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ";
 
   /**
    * Generate a unique 4-letter lobby code
@@ -46,9 +44,11 @@ class LobbyService {
     const maxAttempts = 10;
 
     do {
-      code = '';
+      code = "";
       for (let i = 0; i < 4; i++) {
-        code += this.CODE_CHARS.charAt(Math.floor(Math.random() * this.CODE_CHARS.length));
+        code += this.CODE_CHARS.charAt(
+          Math.floor(Math.random() * this.CODE_CHARS.length)
+        );
       }
       attempts++;
 
@@ -58,7 +58,7 @@ class LobbyService {
         const existsInDb = await prisma.game.findFirst({
           where: {
             code,
-            status: { in: ['WAITING', 'PLAYING', 'VOTING', 'GUESSING'] },
+            status: { in: ["WAITING", "PLAYING", "VOTING", "GUESSING"] },
           },
         });
         if (!existsInDb) break;
@@ -66,7 +66,7 @@ class LobbyService {
     } while (attempts < maxAttempts);
 
     if (attempts >= maxAttempts) {
-      throw new Error('Failed to generate unique lobby code');
+      throw new Error("Failed to generate unique lobby code");
     }
 
     return code;
@@ -79,7 +79,7 @@ class LobbyService {
     hostPlayerId: string,
     hostSocketId: string,
     hostName: string,
-    gameType: string = 'undercover'
+    gameType: string = "undercover"
   ): Promise<{ lobby: LobbyState; player: LobbyPlayer }> {
     const code = await this.generateCode();
 
@@ -88,7 +88,7 @@ class LobbyService {
       data: {
         code,
         gameType,
-        status: 'WAITING',
+        status: "WAITING",
         hostId: hostPlayerId,
       },
     });
@@ -108,7 +108,7 @@ class LobbyService {
     await prisma.gameEvent.create({
       data: {
         gameId: game.id,
-        eventType: 'lobby_created',
+        eventType: "lobby_created",
         payload: { hostName, code },
       },
     });
@@ -118,7 +118,7 @@ class LobbyService {
       gameId: game.id,
       hostId: hostPlayerId,
       hostSocketId,
-      status: 'waiting',
+      status: "waiting",
       gameType,
       maxPlayers: 10,
       minPlayers: 3,
@@ -148,23 +148,27 @@ class LobbyService {
     playerId: string,
     socketId: string,
     playerName: string
-  ): Promise<{ lobby: LobbyState; player: LobbyPlayer; players: LobbyPlayer[] } | null> {
+  ): Promise<{
+    lobby: LobbyState;
+    player: LobbyPlayer;
+    players: LobbyPlayer[];
+  } | null> {
     const upperCode = code.toUpperCase();
     const lobby = await this.getLobbyState(upperCode);
-    
+
     if (!lobby) return null;
-    if (lobby.status !== 'waiting') return null;
+    if (lobby.status !== "waiting") return null;
 
     const players = await this.getLobbyPlayers(upperCode);
     if (players.length >= lobby.maxPlayers) return null;
 
     // Check if name is already taken
-    if (players.some(p => p.name === playerName && p.id !== playerId)) {
+    if (players.some((p) => p.name === playerName && p.id !== playerId)) {
       return null;
     }
 
     // Check if player is already in lobby (reconnecting)
-    const existingPlayer = players.find(p => p.id === playerId);
+    const existingPlayer = players.find((p) => p.id === playerId);
     if (existingPlayer) {
       // Update socket ID and connection status
       existingPlayer.socketId = socketId;
@@ -189,7 +193,7 @@ class LobbyService {
     await prisma.gameEvent.create({
       data: {
         gameId: lobby.gameId,
-        eventType: 'player_joined',
+        eventType: "player_joined",
         payload: { playerName },
       },
     });
@@ -211,19 +215,24 @@ class LobbyService {
   /**
    * Remove player from lobby
    */
-  async leaveLobby(code: string, playerId: string): Promise<{
+  async leaveLobby(
+    code: string,
+    playerId: string
+  ): Promise<{
     removed: boolean;
     newHost?: LobbyPlayer;
     remainingPlayers: LobbyPlayer[];
     lobbyDeleted: boolean;
   }> {
     const lobby = await this.getLobbyState(code);
-    if (!lobby) return { removed: false, remainingPlayers: [], lobbyDeleted: false };
+    if (!lobby)
+      return { removed: false, remainingPlayers: [], lobbyDeleted: false };
 
     let players = await this.getLobbyPlayers(code);
-    const playerIndex = players.findIndex(p => p.id === playerId);
-    
-    if (playerIndex === -1) return { removed: false, remainingPlayers: players, lobbyDeleted: false };
+    const playerIndex = players.findIndex((p) => p.id === playerId);
+
+    if (playerIndex === -1)
+      return { removed: false, remainingPlayers: players, lobbyDeleted: false };
 
     const leavingPlayer = players[playerIndex];
     players.splice(playerIndex, 1);
@@ -236,7 +245,7 @@ class LobbyService {
     await prisma.gameEvent.create({
       data: {
         gameId: lobby.gameId,
-        eventType: 'player_left',
+        eventType: "player_left",
         payload: { playerName: leavingPlayer.name },
       },
     });
@@ -246,7 +255,7 @@ class LobbyService {
       await this.deleteLobby(code);
       await prisma.game.update({
         where: { id: lobby.gameId },
-        data: { status: 'CANCELLED' },
+        data: { status: "CANCELLED" },
       });
       return { removed: true, remainingPlayers: [], lobbyDeleted: true };
     }
@@ -278,7 +287,12 @@ class LobbyService {
     // Update Redis players list
     await this.saveLobbyPlayers(code, players);
 
-    return { removed: true, newHost, remainingPlayers: players, lobbyDeleted: false };
+    return {
+      removed: true,
+      newHost,
+      remainingPlayers: players,
+      lobbyDeleted: false,
+    };
   }
 
   /**
@@ -286,8 +300,8 @@ class LobbyService {
    */
   async handlePlayerDisconnect(code: string, playerId: string): Promise<void> {
     const players = await this.getLobbyPlayers(code);
-    const player = players.find(p => p.id === playerId);
-    
+    const player = players.find((p) => p.id === playerId);
+
     if (player) {
       player.isConnected = false;
       player.disconnectedAt = Date.now();
@@ -302,13 +316,17 @@ class LobbyService {
     code: string,
     playerId: string,
     newSocketId: string
-  ): Promise<{ lobby: LobbyState; player: LobbyPlayer; players: LobbyPlayer[] } | null> {
+  ): Promise<{
+    lobby: LobbyState;
+    player: LobbyPlayer;
+    players: LobbyPlayer[];
+  } | null> {
     const lobby = await this.getLobbyState(code);
     if (!lobby) return null;
 
     const players = await this.getLobbyPlayers(code);
-    const player = players.find(p => p.id === playerId);
-    
+    const player = players.find((p) => p.id === playerId);
+
     if (!player) return null;
 
     // Update socket ID and connection status
@@ -359,14 +377,14 @@ class LobbyService {
 
   async addPlayerToLobby(code: string, player: LobbyPlayer): Promise<void> {
     const players = await this.getLobbyPlayers(code);
-    const existingIndex = players.findIndex(p => p.id === player.id);
-    
+    const existingIndex = players.findIndex((p) => p.id === player.id);
+
     if (existingIndex >= 0) {
       players[existingIndex] = player;
     } else {
       players.push(player);
     }
-    
+
     await this.saveLobbyPlayers(code, players);
   }
 
@@ -384,7 +402,7 @@ class LobbyService {
    */
   async findLobby(code: string): Promise<LobbyState | null> {
     const upperCode = code.toUpperCase();
-    
+
     // Check Redis first
     let lobby = await this.getLobbyState(upperCode);
     if (lobby) return lobby;
@@ -393,7 +411,7 @@ class LobbyService {
     const game = await prisma.game.findFirst({
       where: {
         code: upperCode,
-        status: { in: ['WAITING', 'PLAYING', 'VOTING', 'GUESSING'] },
+        status: { in: ["WAITING", "PLAYING", "VOTING", "GUESSING"] },
       },
       include: {
         players: true,
@@ -403,15 +421,15 @@ class LobbyService {
     if (!game) return null;
 
     // Reconstruct lobby state from database
-    const host = game.players.find(p => p.isHost);
+    const host = game.players.find((p) => p.isHost);
     if (!host) return null;
 
     lobby = {
       code: game.code,
       gameId: game.id,
       hostId: host.playerId,
-      hostSocketId: '', // Will be updated on reconnection
-      status: game.status.toLowerCase() as LobbyState['status'],
+      hostSocketId: "", // Will be updated on reconnection
+      status: game.status.toLowerCase() as LobbyState["status"],
       gameType: game.gameType,
       maxPlayers: 10,
       minPlayers: 3,

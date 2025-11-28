@@ -1,6 +1,6 @@
-import { v4 as uuidv4 } from 'uuid';
-import redis, { REDIS_KEYS, REDIS_TTL } from '../redis';
-import prisma from '../db';
+import { v4 as uuidv4 } from "uuid";
+import prisma from "../db";
+import redis, { REDIS_KEYS, REDIS_TTL } from "../redis";
 
 export interface SessionData {
   id: string;
@@ -25,7 +25,10 @@ class SessionService {
   /**
    * Create or get a player based on visitor ID (browser fingerprint)
    */
-  async getOrCreatePlayer(visitorId: string | undefined, displayName: string): Promise<{ id: string; name: string; isNew: boolean }> {
+  async getOrCreatePlayer(
+    visitorId: string | undefined,
+    displayName: string
+  ): Promise<{ id: string; name: string; isNew: boolean }> {
     // If we have a visitor ID, try to find existing player
     if (visitorId) {
       const existing = await prisma.player.findUnique({
@@ -58,7 +61,11 @@ class SessionService {
   /**
    * Create a new session
    */
-  async createSession(playerId: string, playerName: string, visitorId?: string): Promise<SessionData> {
+  async createSession(
+    playerId: string,
+    playerName: string,
+    visitorId?: string
+  ): Promise<SessionData> {
     const sessionId = uuidv4();
     const now = Date.now();
 
@@ -92,7 +99,10 @@ class SessionService {
   /**
    * Update session
    */
-  async updateSession(sessionId: string, updates: Partial<SessionData>): Promise<SessionData | null> {
+  async updateSession(
+    sessionId: string,
+    updates: Partial<SessionData>
+  ): Promise<SessionData | null> {
     const session = await this.getSession(sessionId);
     if (!session) return null;
 
@@ -114,7 +124,12 @@ class SessionService {
   /**
    * Register a socket connection for a player
    */
-  async registerSocket(socketId: string, playerId: string, playerName: string, lobbyCode?: string): Promise<void> {
+  async registerSocket(
+    socketId: string,
+    playerId: string,
+    playerName: string,
+    lobbyCode?: string
+  ): Promise<void> {
     const socketSession: SocketSession = {
       socketId,
       playerId,
@@ -196,7 +211,9 @@ class SessionService {
   /**
    * Check if player can reconnect (within grace period)
    */
-  async getReconnectionData(playerId: string): Promise<(SocketSession & { disconnectedAt: number }) | null> {
+  async getReconnectionData(
+    playerId: string
+  ): Promise<(SocketSession & { disconnectedAt: number }) | null> {
     const data = await redis.get(REDIS_KEYS.reconnectQueue(playerId));
     if (!data) return null;
     return JSON.parse(data);
@@ -212,7 +229,10 @@ class SessionService {
   /**
    * Update player's lobby association
    */
-  async setPlayerLobby(playerId: string, lobbyCode: string | null): Promise<void> {
+  async setPlayerLobby(
+    playerId: string,
+    lobbyCode: string | null
+  ): Promise<void> {
     if (lobbyCode) {
       await redis.setex(
         REDIS_KEYS.playerToLobby(playerId),

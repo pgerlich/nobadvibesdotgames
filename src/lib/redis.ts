@@ -1,4 +1,4 @@
-import Redis from 'ioredis';
+import Redis from "ioredis";
 
 const globalForRedis = globalThis as unknown as {
   redis: Redis | undefined;
@@ -8,9 +8,9 @@ const globalForRedis = globalThis as unknown as {
 function createRedisClient(): Redis {
   const url = process.env.REDIS_URL;
   if (!url) {
-    throw new Error('REDIS_URL environment variable is not set');
+    throw new Error("REDIS_URL environment variable is not set");
   }
-  
+
   const redis = new Redis(url, {
     maxRetriesPerRequest: 3,
     retryDelayOnFailover: 100,
@@ -18,12 +18,12 @@ function createRedisClient(): Redis {
     lazyConnect: true,
   });
 
-  redis.on('error', (err) => {
-    console.error('Redis connection error:', err);
+  redis.on("error", (err) => {
+    console.error("Redis connection error:", err);
   });
 
-  redis.on('connect', () => {
-    console.log('Redis connected');
+  redis.on("connect", () => {
+    console.log("Redis connected");
   });
 
   return redis;
@@ -35,7 +35,7 @@ export const redis = globalForRedis.redis ?? createRedisClient();
 // Separate client for pub/sub (required by ioredis)
 export const redisSub = globalForRedis.redisSub ?? createRedisClient();
 
-if (process.env.NODE_ENV !== 'production') {
+if (process.env.NODE_ENV !== "production") {
   globalForRedis.redis = redis;
   globalForRedis.redisSub = redisSub;
 }
@@ -45,20 +45,20 @@ export const REDIS_KEYS = {
   // Active lobby state (in-memory for speed, backed up to DB)
   lobby: (code: string) => `lobby:${code}`,
   lobbyPlayers: (code: string) => `lobby:${code}:players`,
-  
+
   // Socket session mapping
   socketToPlayer: (socketId: string) => `socket:${socketId}:player`,
   playerToSocket: (playerId: string) => `player:${playerId}:socket`,
   playerToLobby: (playerId: string) => `player:${playerId}:lobby`,
-  
+
   // Active game state
   gameState: (gameId: string) => `game:${gameId}:state`,
   gameClues: (gameId: string) => `game:${gameId}:clues`,
   gameVotes: (gameId: string) => `game:${gameId}:votes`,
-  
+
   // Session management
   session: (sessionId: string) => `session:${sessionId}`,
-  
+
   // Reconnection queue
   reconnectQueue: (playerId: string) => `reconnect:${playerId}`,
 } as const;

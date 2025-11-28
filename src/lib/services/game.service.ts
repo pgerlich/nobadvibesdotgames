@@ -1,15 +1,92 @@
-import prisma from '../db';
-import redis, { REDIS_KEYS, REDIS_TTL } from '../redis';
-import lobbyService, { LobbyState, LobbyPlayer } from './lobby.service';
+import prisma from "../db";
+import lobbyService, { LobbyPlayer } from "./lobby.service";
 
 // Game categories and words
 const CATEGORIES: Record<string, string[]> = {
-  'Animals': ['Dog', 'Cat', 'Elephant', 'Giraffe', 'Lion', 'Tiger', 'Bear', 'Wolf', 'Fox', 'Rabbit', 'Deer', 'Horse'],
-  'Food': ['Pizza', 'Burger', 'Sushi', 'Pasta', 'Taco', 'Salad', 'Steak', 'Sandwich', 'Soup', 'Curry', 'Ramen', 'Burrito'],
-  'Movies': ['Titanic', 'Avatar', 'Inception', 'Jaws', 'Matrix', 'Frozen', 'Shrek', 'Gladiator', 'Psycho', 'Rocky', 'Alien', 'Joker'],
-  'Sports': ['Soccer', 'Basketball', 'Tennis', 'Golf', 'Baseball', 'Hockey', 'Cricket', 'Rugby', 'Boxing', 'Swimming', 'Cycling', 'Skiing'],
-  'Countries': ['France', 'Japan', 'Brazil', 'Egypt', 'Canada', 'Australia', 'Mexico', 'Italy', 'India', 'Germany', 'Spain', 'China'],
-  'Professions': ['Doctor', 'Teacher', 'Chef', 'Pilot', 'Lawyer', 'Artist', 'Engineer', 'Nurse', 'Firefighter', 'Police', 'Astronaut', 'Scientist'],
+  Animals: [
+    "Dog",
+    "Cat",
+    "Elephant",
+    "Giraffe",
+    "Lion",
+    "Tiger",
+    "Bear",
+    "Wolf",
+    "Fox",
+    "Rabbit",
+    "Deer",
+    "Horse",
+  ],
+  Food: [
+    "Pizza",
+    "Burger",
+    "Sushi",
+    "Pasta",
+    "Taco",
+    "Salad",
+    "Steak",
+    "Sandwich",
+    "Soup",
+    "Curry",
+    "Ramen",
+    "Burrito",
+  ],
+  Movies: [
+    "Titanic",
+    "Avatar",
+    "Inception",
+    "Jaws",
+    "Matrix",
+    "Frozen",
+    "Shrek",
+    "Gladiator",
+    "Psycho",
+    "Rocky",
+    "Alien",
+    "Joker",
+  ],
+  Sports: [
+    "Soccer",
+    "Basketball",
+    "Tennis",
+    "Golf",
+    "Baseball",
+    "Hockey",
+    "Cricket",
+    "Rugby",
+    "Boxing",
+    "Swimming",
+    "Cycling",
+    "Skiing",
+  ],
+  Countries: [
+    "France",
+    "Japan",
+    "Brazil",
+    "Egypt",
+    "Canada",
+    "Australia",
+    "Mexico",
+    "Italy",
+    "India",
+    "Germany",
+    "Spain",
+    "China",
+  ],
+  Professions: [
+    "Doctor",
+    "Teacher",
+    "Chef",
+    "Pilot",
+    "Lawyer",
+    "Artist",
+    "Engineer",
+    "Nurse",
+    "Firefighter",
+    "Police",
+    "Astronaut",
+    "Scientist",
+  ],
 };
 
 export interface GameStartResult {
@@ -25,7 +102,12 @@ export interface VoteResult {
   mostVotedName: string;
   voteCount: number;
   isChameleon: boolean;
-  votes: Array<{ casterId: string; casterName: string; targetId: string; targetName: string }>;
+  votes: Array<{
+    casterId: string;
+    casterName: string;
+    targetId: string;
+    targetName: string;
+  }>;
 }
 
 export interface GameResult {
@@ -35,7 +117,7 @@ export interface GameResult {
   caughtChameleon: boolean;
   chameleonGuess: string | null;
   chameleonGuessedCorrectly: boolean;
-  winningSide: 'chameleon' | 'players';
+  winningSide: "chameleon" | "players";
   votes: Array<{ name: string; votedFor: string }>;
 }
 
@@ -54,14 +136,15 @@ class GameService {
    */
   async startGame(code: string): Promise<GameStartResult | null> {
     const lobby = await lobbyService.getLobbyState(code);
-    if (!lobby || lobby.status !== 'waiting') return null;
+    if (!lobby || lobby.status !== "waiting") return null;
 
     const players = await lobbyService.getLobbyPlayers(code);
     if (players.length < lobby.minPlayers) return null;
 
     // Select random category and word
     const categoryNames = Object.keys(CATEGORIES);
-    const category = categoryNames[Math.floor(Math.random() * categoryNames.length)];
+    const category =
+      categoryNames[Math.floor(Math.random() * categoryNames.length)];
     const words = CATEGORIES[category];
     const secretWord = words[Math.floor(Math.random() * words.length)];
 
@@ -73,12 +156,12 @@ class GameService {
     const playerOrder = shuffleArray(players);
 
     // Update lobby state
-    lobby.status = 'playing';
+    lobby.status = "playing";
     lobby.category = category;
     lobby.secretWord = secretWord;
     lobby.allWords = words;
     lobby.chameleonId = chameleon.id;
-    lobby.playerOrder = playerOrder.map(p => p.id);
+    lobby.playerOrder = playerOrder.map((p) => p.id);
     lobby.currentPlayerIndex = 0;
     lobby.clues = {};
     lobby.votes = {};
@@ -89,7 +172,7 @@ class GameService {
     await prisma.game.update({
       where: { id: lobby.gameId },
       data: {
-        status: 'PLAYING',
+        status: "PLAYING",
         category,
         secretWord,
         chameleonId: chameleon.id,
@@ -101,7 +184,10 @@ class GameService {
     for (let i = 0; i < playerOrder.length; i++) {
       await prisma.gamePlayer.update({
         where: {
-          gameId_playerId: { gameId: lobby.gameId, playerId: playerOrder[i].id },
+          gameId_playerId: {
+            gameId: lobby.gameId,
+            playerId: playerOrder[i].id,
+          },
         },
         data: {
           turnOrder: i,
@@ -114,7 +200,7 @@ class GameService {
     await prisma.gameEvent.create({
       data: {
         gameId: lobby.gameId,
-        eventType: 'game_started',
+        eventType: "game_started",
         payload: { category, playerCount: players.length },
       },
     });
@@ -131,13 +217,17 @@ class GameService {
   /**
    * Submit a clue
    */
-  async submitClue(code: string, playerId: string, clue: string): Promise<{
+  async submitClue(
+    code: string,
+    playerId: string,
+    clue: string
+  ): Promise<{
     success: boolean;
     nextPlayerId?: string;
     allCluesSubmitted?: boolean;
   }> {
     const lobby = await lobbyService.getLobbyState(code);
-    if (!lobby || lobby.status !== 'playing') return { success: false };
+    if (!lobby || lobby.status !== "playing") return { success: false };
 
     const players = await lobbyService.getLobbyPlayers(code);
     const currentPlayerId = lobby.playerOrder![lobby.currentPlayerIndex!];
@@ -162,7 +252,7 @@ class GameService {
     await prisma.gameEvent.create({
       data: {
         gameId: lobby.gameId,
-        eventType: 'clue_submitted',
+        eventType: "clue_submitted",
         payload: { playerId, clue },
       },
     });
@@ -173,10 +263,10 @@ class GameService {
     const allCluesSubmitted = lobby.currentPlayerIndex >= players.length;
 
     if (allCluesSubmitted) {
-      lobby.status = 'voting';
+      lobby.status = "voting";
       await prisma.game.update({
         where: { id: lobby.gameId },
-        data: { status: 'VOTING' },
+        data: { status: "VOTING" },
       });
     }
 
@@ -184,7 +274,9 @@ class GameService {
 
     return {
       success: true,
-      nextPlayerId: allCluesSubmitted ? undefined : lobby.playerOrder![lobby.currentPlayerIndex],
+      nextPlayerId: allCluesSubmitted
+        ? undefined
+        : lobby.playerOrder![lobby.currentPlayerIndex],
       allCluesSubmitted,
     };
   }
@@ -192,14 +284,19 @@ class GameService {
   /**
    * Submit a vote
    */
-  async submitVote(code: string, casterId: string, targetId: string): Promise<{
+  async submitVote(
+    code: string,
+    casterId: string,
+    targetId: string
+  ): Promise<{
     success: boolean;
     votesCount: number;
     allVotesIn: boolean;
     voteResult?: VoteResult;
   }> {
     const lobby = await lobbyService.getLobbyState(code);
-    if (!lobby || lobby.status !== 'voting') return { success: false, votesCount: 0, allVotesIn: false };
+    if (!lobby || lobby.status !== "voting")
+      return { success: false, votesCount: 0, allVotesIn: false };
 
     const players = await lobbyService.getLobbyPlayers(code);
 
@@ -207,7 +304,11 @@ class GameService {
     if (!lobby.votes) lobby.votes = {};
     if (lobby.votes[casterId]) {
       // Already voted
-      return { success: false, votesCount: Object.keys(lobby.votes).length, allVotesIn: false };
+      return {
+        success: false,
+        votesCount: Object.keys(lobby.votes).length,
+        allVotesIn: false,
+      };
     }
 
     lobby.votes[casterId] = targetId;
@@ -224,7 +325,7 @@ class GameService {
     await prisma.gameEvent.create({
       data: {
         gameId: lobby.gameId,
-        eventType: 'vote_cast',
+        eventType: "vote_cast",
         payload: { casterId, targetId },
       },
     });
@@ -244,7 +345,7 @@ class GameService {
       voteTally[targetId] = (voteTally[targetId] || 0) + 1;
     }
 
-    let mostVotedId = '';
+    let mostVotedId = "";
     let maxVotes = 0;
     for (const [id, count] of Object.entries(voteTally)) {
       if (count > maxVotes) {
@@ -253,31 +354,31 @@ class GameService {
       }
     }
 
-    const mostVotedPlayer = players.find(p => p.id === mostVotedId);
+    const mostVotedPlayer = players.find((p) => p.id === mostVotedId);
     const isChameleon = mostVotedId === lobby.chameleonId;
 
     const voteResult: VoteResult = {
       mostVotedId,
-      mostVotedName: mostVotedPlayer?.name || 'Unknown',
+      mostVotedName: mostVotedPlayer?.name || "Unknown",
       voteCount: maxVotes,
       isChameleon,
       votes: Object.entries(lobby.votes).map(([casterId, targetId]) => ({
         casterId,
-        casterName: players.find(p => p.id === casterId)?.name || 'Unknown',
+        casterName: players.find((p) => p.id === casterId)?.name || "Unknown",
         targetId,
-        targetName: players.find(p => p.id === targetId)?.name || 'Unknown',
+        targetName: players.find((p) => p.id === targetId)?.name || "Unknown",
       })),
     };
 
     // Update status based on whether chameleon was caught
     if (isChameleon) {
-      lobby.status = 'guessing';
+      lobby.status = "guessing";
       await prisma.game.update({
         where: { id: lobby.gameId },
-        data: { status: 'GUESSING' },
+        data: { status: "GUESSING" },
       });
     } else {
-      lobby.status = 'finished';
+      lobby.status = "finished";
     }
 
     await lobbyService.saveLobbyState(code, lobby);
@@ -290,20 +391,21 @@ class GameService {
    */
   async submitGuess(code: string, guess: string): Promise<GameResult | null> {
     const lobby = await lobbyService.getLobbyState(code);
-    if (!lobby || lobby.status !== 'guessing') return null;
+    if (!lobby || lobby.status !== "guessing") return null;
 
     const players = await lobbyService.getLobbyPlayers(code);
-    const chameleonPlayer = players.find(p => p.id === lobby.chameleonId);
-    const guessCorrect = guess.toLowerCase().trim() === lobby.secretWord?.toLowerCase().trim();
+    const chameleonPlayer = players.find((p) => p.id === lobby.chameleonId);
+    const guessCorrect =
+      guess.toLowerCase().trim() === lobby.secretWord?.toLowerCase().trim();
 
     // Determine winner
-    const winningSide = guessCorrect ? 'chameleon' : 'players';
+    const winningSide = guessCorrect ? "chameleon" : "players";
 
     // Update database
     await prisma.game.update({
       where: { id: lobby.gameId },
       data: {
-        status: 'FINISHED',
+        status: "FINISHED",
         chameleonCaught: true,
         chameleonGuess: guess,
         chameleonGuessCorrect: guessCorrect,
@@ -315,25 +417,25 @@ class GameService {
     await prisma.gameEvent.create({
       data: {
         gameId: lobby.gameId,
-        eventType: 'chameleon_guessed',
+        eventType: "chameleon_guessed",
         payload: { guess, correct: guessCorrect },
       },
     });
 
-    lobby.status = 'finished';
+    lobby.status = "finished";
     await lobbyService.saveLobbyState(code, lobby);
 
     return {
       chameleonId: lobby.chameleonId!,
-      chameleonName: chameleonPlayer?.name || 'Unknown',
+      chameleonName: chameleonPlayer?.name || "Unknown",
       secretWord: lobby.secretWord!,
       caughtChameleon: true,
       chameleonGuess: guess,
       chameleonGuessedCorrectly: guessCorrect,
       winningSide,
       votes: Object.entries(lobby.votes || {}).map(([casterId, targetId]) => ({
-        name: players.find(p => p.id === casterId)?.name || 'Unknown',
-        votedFor: players.find(p => p.id === targetId)?.name || 'Unknown',
+        name: players.find((p) => p.id === casterId)?.name || "Unknown",
+        votedFor: players.find((p) => p.id === targetId)?.name || "Unknown",
       })),
     };
   }
@@ -346,7 +448,7 @@ class GameService {
     if (!lobby) return null;
 
     const players = await lobbyService.getLobbyPlayers(code);
-    const chameleonPlayer = players.find(p => p.id === lobby.chameleonId);
+    const chameleonPlayer = players.find((p) => p.id === lobby.chameleonId);
 
     // Determine if chameleon was caught based on votes
     const voteTally: Record<string, number> = {};
@@ -354,7 +456,7 @@ class GameService {
       voteTally[targetId] = (voteTally[targetId] || 0) + 1;
     }
 
-    let mostVotedId = '';
+    let mostVotedId = "";
     let maxVotes = 0;
     for (const [id, count] of Object.entries(voteTally)) {
       if (count > maxVotes) {
@@ -364,14 +466,14 @@ class GameService {
     }
 
     const caughtChameleon = mostVotedId === lobby.chameleonId;
-    const winningSide = caughtChameleon ? 'players' : 'chameleon';
+    const winningSide = caughtChameleon ? "players" : "chameleon";
 
     // Update database if not already finished
-    if (lobby.status !== 'finished') {
+    if (lobby.status !== "finished") {
       await prisma.game.update({
         where: { id: lobby.gameId },
         data: {
-          status: 'FINISHED',
+          status: "FINISHED",
           chameleonCaught: caughtChameleon,
           winningSide,
           endedAt: new Date(),
@@ -381,15 +483,15 @@ class GameService {
 
     return {
       chameleonId: lobby.chameleonId!,
-      chameleonName: chameleonPlayer?.name || 'Unknown',
+      chameleonName: chameleonPlayer?.name || "Unknown",
       secretWord: lobby.secretWord!,
       caughtChameleon,
       chameleonGuess: null,
       chameleonGuessedCorrectly: false,
       winningSide,
       votes: Object.entries(lobby.votes || {}).map(([casterId, targetId]) => ({
-        name: players.find(p => p.id === casterId)?.name || 'Unknown',
-        votedFor: players.find(p => p.id === targetId)?.name || 'Unknown',
+        name: players.find((p) => p.id === casterId)?.name || "Unknown",
+        votedFor: players.find((p) => p.id === targetId)?.name || "Unknown",
       })),
     };
   }
@@ -408,7 +510,7 @@ class GameService {
       data: {
         code: lobby.code,
         gameType: lobby.gameType,
-        status: 'WAITING',
+        status: "WAITING",
         hostId: lobby.hostId,
       },
     });
@@ -427,7 +529,7 @@ class GameService {
 
     // Reset lobby state
     lobby.gameId = newGame.id;
-    lobby.status = 'waiting';
+    lobby.status = "waiting";
     lobby.category = undefined;
     lobby.secretWord = undefined;
     lobby.allWords = undefined;
@@ -461,12 +563,12 @@ class GameService {
         },
       },
       orderBy: {
-        game: { createdAt: 'desc' },
+        game: { createdAt: "desc" },
       },
       take: limit,
     });
 
-    return games.map(gp => ({
+    return games.map((gp) => ({
       gameId: gp.game.id,
       code: gp.game.code,
       gameType: gp.game.gameType,

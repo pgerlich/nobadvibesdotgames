@@ -34,7 +34,7 @@ model Game {
   category     String?
   secretWord   String?
   chameleonId  String? // ID of the player who was the chameleon
-  
+
   // Results
   chameleonCaught       Boolean?
   chameleonGuess        String?
@@ -65,14 +65,14 @@ model GamePlayer {
   id       String  @id @default(uuid())
   gameId   String
   playerId String
-  
+
   // In-game state
   displayName   String // Name used in this game
   isHost        Boolean @default(false)
   isChameleon   Boolean @default(false)
   turnOrder     Int?
   isConnected   Boolean @default(true)
-  
+
   joinedAt      DateTime @default(now())
   disconnectedAt DateTime?
 
@@ -92,7 +92,7 @@ model GameClue {
   playerId String
   clue     String
   turnOrder Int
-  
+
   createdAt DateTime @default(now())
 
   // Relations
@@ -108,7 +108,7 @@ model GameVote {
   gameId     String
   casterId   String // Who cast the vote
   targetId   String // Who was voted for
-  
+
   createdAt DateTime @default(now())
 
   // Relations
@@ -126,7 +126,7 @@ model GameEvent {
   gameId    String
   eventType String // e.g., "player_joined", "game_started", "clue_submitted", "vote_cast"
   payload   Json? // Event-specific data
-  
+
   createdAt DateTime @default(now())
 
   // Relations

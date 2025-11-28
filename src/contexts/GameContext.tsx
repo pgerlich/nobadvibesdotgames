@@ -153,7 +153,11 @@ export function GameProvider({ children }: { children: ReactNode }) {
 
   // Initialize socket
   useEffect(() => {
-    const newSocket = io({
+    // In production, connect to the WebSocket server URL
+    // In development, connect to the same host
+    const wsUrl = process.env.NEXT_PUBLIC_WS_URL || undefined;
+    
+    const newSocket = io(wsUrl, {
       reconnection: true,
       reconnectionAttempts: 10,
       reconnectionDelay: 1000,
