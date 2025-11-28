@@ -1,8 +1,12 @@
+import 'dotenv/config';
 import { createServer } from 'http';
 import { parse } from 'url';
 import next from 'next';
 import { Server } from 'socket.io';
-import type { Player, Lobby, GameState } from './src/types/game';
+import { v4 as uuidv4 } from 'uuid';
+import { sessionService, lobbyService, gameService } from './src/lib/services';
+import type { LobbyPlayer } from './src/lib/services';
+import redis from './src/lib/redis';
 
 const dev = process.env.NODE_ENV !== 'production';
 const hostname = 'localhost';
@@ -11,38 +15,11 @@ const port = parseInt(process.env.PORT || '3000', 10);
 const app = next({ dev, hostname, port });
 const handle = app.getRequestHandler();
 
-// Game categories and words
-const categories: Record<string, string[]> = {
-  'Animals': ['Dog', 'Cat', 'Elephant', 'Giraffe', 'Lion', 'Tiger', 'Bear', 'Wolf', 'Fox', 'Rabbit', 'Deer', 'Horse'],
-  'Food': ['Pizza', 'Burger', 'Sushi', 'Pasta', 'Taco', 'Salad', 'Steak', 'Sandwich', 'Soup', 'Curry', 'Ramen', 'Burrito'],
-  'Movies': ['Titanic', 'Avatar', 'Inception', 'Jaws', 'Matrix', 'Frozen', 'Shrek', 'Gladiator', 'Psycho', 'Rocky', 'Alien', 'Joker'],
-  'Sports': ['Soccer', 'Basketball', 'Tennis', 'Golf', 'Baseball', 'Hockey', 'Cricket', 'Rugby', 'Boxing', 'Swimming', 'Cycling', 'Skiing'],
-  'Countries': ['France', 'Japan', 'Brazil', 'Egypt', 'Canada', 'Australia', 'Mexico', 'Italy', 'India', 'Germany', 'Spain', 'China'],
-  'Professions': ['Doctor', 'Teacher', 'Chef', 'Pilot', 'Lawyer', 'Artist', 'Engineer', 'Nurse', 'Firefighter', 'Police', 'Astronaut', 'Scientist'],
-};
+app.prepare().then(async () => {
+  // Connect to Redis
+  await redis.connect();
+  console.log('Redis connected');
 
-// Store active lobbies
-const lobbies = new Map<string, Lobby>();
-
-function generateCode(): string {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
-  let code = '';
-  for (let i = 0; i < 4; i++) {
-    code += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return lobbies.has(code) ? generateCode() : code;
-}
-
-function shuffleArray<T>(array: T[]): T[] {
-  const shuffled = [...array];
-  for (let i = shuffled.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-  }
-  return shuffled;
-}
-
-app.prepare().then(() => {
   const httpServer = createServer((req, res) => {
     const parsedUrl = parse(req.url!, true);
     handle(req, res, parsedUrl);
@@ -59,428 +36,398 @@ app.prepare().then(() => {
     allowUpgrades: true,
   });
 
+  // Helper to format players for client
+  function formatPlayersForClient(players: LobbyPlayer[]) {
+    return players.map(p => ({
+      id: p.socketId, // Client uses socket ID as player ID
+      name: p.name,
+      isHost: p.isHost,
+      clue: null,
+      vote: null,
+      hasVoted: false,
+    }));
+  }
+
   io.on('connection', (socket) => {
     console.log('Player connected:', socket.id);
+    let currentPlayerId: string | null = null;
+    let currentLobbyCode: string | null = null;
 
-    socket.on('create-lobby', (playerName: string) => {
-      const code = generateCode();
-      const player: Player = {
-        id: socket.id,
-        name: playerName,
-        isHost: true,
-        clue: null,
-        vote: null,
-        hasVoted: false,
-      };
+    socket.on('create-lobby', async (playerName: string) => {
+      try {
+        // Create or get player
+        const visitorId = socket.handshake.query.visitorId as string | undefined;
+        const { id: playerId } = await sessionService.getOrCreatePlayer(visitorId, playerName);
+        currentPlayerId = playerId;
 
-      const lobby: Lobby = {
-        code,
-        host: socket.id,
-        players: [player],
-        state: 'waiting',
-        category: null,
-        secretWord: null,
-        allWords: [],
-        chameleonId: null,
-        playerOrder: [],
-        currentPlayerIndex: 0,
-        roundEndTime: null,
-        mostVoted: null,
-        voteCount: 0,
-        caughtChameleon: false,
-        chameleonGuess: null,
-        chameleonGuessedCorrectly: false,
-      };
+        // Create lobby
+        const { lobby, player } = await lobbyService.createLobby(
+          playerId,
+          socket.id,
+          playerName,
+          'undercover'
+        );
+        currentLobbyCode = lobby.code;
 
-      lobbies.set(code, lobby);
-      socket.join(code);
-      socket.emit('lobby-created', { code, players: lobby.players });
-      console.log(`Lobby ${code} created by ${playerName}`);
+        // Register socket
+        await sessionService.registerSocket(socket.id, playerId, playerName, lobby.code);
+
+        socket.join(lobby.code);
+        socket.emit('lobby-created', {
+          code: lobby.code,
+          players: formatPlayersForClient([player]),
+        });
+
+        console.log(`Lobby ${lobby.code} created by ${playerName}`);
+      } catch (error) {
+        console.error('Error creating lobby:', error);
+        socket.emit('error', 'Failed to create lobby');
+      }
     });
 
-    socket.on('join-lobby', ({ code, playerName }: { code: string; playerName: string }) => {
-      const lobby = lobbies.get(code.toUpperCase());
-      if (!lobby) {
-        socket.emit('error', 'Lobby not found');
-        return;
-      }
-      if (lobby.state !== 'waiting') {
-        socket.emit('error', 'Game already in progress');
-        return;
-      }
-      if (lobby.players.length >= 10) {
-        socket.emit('error', 'Lobby is full');
-        return;
-      }
-      if (lobby.players.some((p) => p.name === playerName)) {
-        socket.emit('error', 'Name already taken');
-        return;
-      }
+    socket.on('join-lobby', async ({ code, playerName }: { code: string; playerName: string }) => {
+      try {
+        // Create or get player
+        const visitorId = socket.handshake.query.visitorId as string | undefined;
+        const { id: playerId } = await sessionService.getOrCreatePlayer(visitorId, playerName);
+        currentPlayerId = playerId;
 
-      const player: Player = {
-        id: socket.id,
-        name: playerName,
-        isHost: false,
-        clue: null,
-        vote: null,
-        hasVoted: false,
-      };
+        // Join lobby
+        const result = await lobbyService.joinLobby(code, playerId, socket.id, playerName);
+        if (!result) {
+          socket.emit('error', 'Unable to join lobby');
+          return;
+        }
 
-      lobby.players.push(player);
-      socket.join(lobby.code);
-      socket.emit('lobby-joined', { code: lobby.code, players: lobby.players });
-      io.to(lobby.code).emit('player-joined', { players: lobby.players });
-      console.log(`${playerName} joined lobby ${code}`);
+        currentLobbyCode = result.lobby.code;
+
+        // Register socket
+        await sessionService.registerSocket(socket.id, playerId, playerName, result.lobby.code);
+
+        socket.join(result.lobby.code);
+        socket.emit('lobby-joined', {
+          code: result.lobby.code,
+          players: formatPlayersForClient(result.players),
+        });
+
+        // Notify others
+        io.to(result.lobby.code).emit('player-joined', {
+          players: formatPlayersForClient(result.players),
+        });
+
+        console.log(`${playerName} joined lobby ${code}`);
+      } catch (error) {
+        console.error('Error joining lobby:', error);
+        socket.emit('error', 'Failed to join lobby');
+      }
     });
 
-    socket.on('rejoin-lobby', ({ code, playerName }: { code: string; playerName: string }) => {
-      const lobby = lobbies.get(code?.toUpperCase());
-      if (!lobby) {
-        socket.emit('rejoin-failed');
-        return;
-      }
+    socket.on('rejoin-lobby', async ({ code, playerName }: { code: string; playerName: string }) => {
+      try {
+        // Get or create player
+        const visitorId = socket.handshake.query.visitorId as string | undefined;
+        const { id: playerId } = await sessionService.getOrCreatePlayer(visitorId, playerName);
+        currentPlayerId = playerId;
 
-      const existingPlayer = lobby.players.find((p) => p.name === playerName);
-      if (!existingPlayer) {
-        if (lobby.state === 'waiting' && lobby.players.length < 10) {
-          const player: Player = {
-            id: socket.id,
-            name: playerName,
-            isHost: false,
-            clue: null,
-            vote: null,
-            hasVoted: false,
-          };
-          lobby.players.push(player);
-          socket.join(lobby.code);
+        // Check for reconnection data
+        const reconnectData = await sessionService.getReconnectionData(playerId);
+        
+        // Try to reconnect to existing lobby
+        const result = await lobbyService.handlePlayerReconnect(code.toUpperCase(), playerId, socket.id);
+        
+        if (result) {
+          currentLobbyCode = result.lobby.code;
+          await sessionService.clearReconnection(playerId);
+          await sessionService.registerSocket(socket.id, playerId, playerName, result.lobby.code);
+
+          socket.join(result.lobby.code);
           socket.emit('rejoin-success', {
-            code: lobby.code,
-            players: lobby.players,
-            state: lobby.state,
-            isHost: false,
+            code: result.lobby.code,
+            players: formatPlayersForClient(result.players),
+            state: result.lobby.status,
+            isHost: result.player.isHost,
           });
-          io.to(lobby.code).emit('player-joined', { players: lobby.players });
+
+          console.log(`${playerName} rejoined lobby ${code}`);
+          return;
+        }
+
+        // Try joining as new player if lobby is in waiting state
+        const joinResult = await lobbyService.joinLobby(code, playerId, socket.id, playerName);
+        if (joinResult && joinResult.lobby.status === 'waiting') {
+          currentLobbyCode = joinResult.lobby.code;
+          await sessionService.registerSocket(socket.id, playerId, playerName, joinResult.lobby.code);
+
+          socket.join(joinResult.lobby.code);
+          socket.emit('rejoin-success', {
+            code: joinResult.lobby.code,
+            players: formatPlayersForClient(joinResult.players),
+            state: 'waiting',
+            isHost: joinResult.player.isHost,
+          });
+
+          io.to(joinResult.lobby.code).emit('player-joined', {
+            players: formatPlayersForClient(joinResult.players),
+          });
+
           console.log(`${playerName} joined lobby ${code} via rejoin`);
-        } else {
-          socket.emit('rejoin-failed');
+          return;
         }
-        return;
-      }
 
-      const oldId = existingPlayer.id;
-      existingPlayer.id = socket.id;
-      delete existingPlayer.disconnectedAt;
-      delete existingPlayer.disconnectedSocketId;
-
-      if (lobby.host === oldId) {
-        lobby.host = socket.id;
-      }
-      if (lobby.chameleonId === oldId) {
-        lobby.chameleonId = socket.id;
-      }
-      if (lobby.playerOrder) {
-        const orderPlayer = lobby.playerOrder.find((p) => p.id === oldId);
-        if (orderPlayer) orderPlayer.id = socket.id;
-      }
-
-      socket.join(lobby.code);
-      socket.emit('rejoin-success', {
-        code: lobby.code,
-        players: lobby.players,
-        state: lobby.state,
-        isHost: lobby.host === socket.id,
-      });
-      console.log(`${playerName} rejoined lobby ${code}`);
-    });
-
-    socket.on('leave-lobby', (code: string) => {
-      const lobby = lobbies.get(code);
-      if (!lobby) return;
-
-      const playerIndex = lobby.players.findIndex((p) => p.id === socket.id);
-      if (playerIndex === -1) return;
-
-      const player = lobby.players[playerIndex];
-      lobby.players.splice(playerIndex, 1);
-      socket.leave(code);
-
-      if (lobby.players.length === 0) {
-        lobbies.delete(code);
-        console.log(`Lobby ${code} deleted (empty)`);
-        return;
-      }
-
-      if (player.isHost && lobby.players.length > 0) {
-        lobby.players[0].isHost = true;
-        lobby.host = lobby.players[0].id;
-      }
-
-      io.to(code).emit('player-left', { players: lobby.players, leftPlayer: player.name });
-    });
-
-    socket.on('start-game', (code: string) => {
-      const lobby = lobbies.get(code);
-      if (!lobby) return;
-      if (lobby.host !== socket.id) return;
-      if (lobby.players.length < 3) return;
-
-      const categoryNames = Object.keys(categories);
-      const category = categoryNames[Math.floor(Math.random() * categoryNames.length)];
-      const words = categories[category];
-      const secretWord = words[Math.floor(Math.random() * words.length)];
-
-      const chameleonIndex = Math.floor(Math.random() * lobby.players.length);
-      const chameleon = lobby.players[chameleonIndex];
-
-      lobby.state = 'playing';
-      lobby.category = category;
-      lobby.secretWord = secretWord;
-      lobby.allWords = words;
-      lobby.chameleonId = chameleon.id;
-      lobby.playerOrder = shuffleArray([...lobby.players]);
-      lobby.currentPlayerIndex = 0;
-
-      lobby.players.forEach((p) => {
-        p.clue = null;
-        p.vote = null;
-        p.hasVoted = false;
-      });
-
-      lobby.players.forEach((p) => {
-        const isChameleon = p.id === chameleon.id;
-        io.to(p.id).emit('game-started', {
-          category,
-          allWords: words,
-          secretWord: isChameleon ? null : secretWord,
-          isChameleon,
-          playerOrder: lobby.playerOrder,
-          currentPlayer: lobby.playerOrder[0],
-          roundEndTime: Date.now() + 60000,
-        });
-      });
-
-      console.log(`Game started in lobby ${code}`);
-    });
-
-    socket.on('submit-clue', ({ code, clue }: { code: string; clue: string }) => {
-      const lobby = lobbies.get(code);
-      if (!lobby || lobby.state !== 'playing') return;
-
-      const currentPlayer = lobby.playerOrder[lobby.currentPlayerIndex];
-      if (currentPlayer.id !== socket.id) return;
-
-      const player = lobby.players.find((p) => p.id === socket.id);
-      if (!player) return;
-
-      player.clue = clue;
-
-      io.to(code).emit('clue-submitted', {
-        playerId: socket.id,
-        playerName: player.name,
-        clue,
-        clues: lobby.players.map((p) => ({ id: p.id, name: p.name, clue: p.clue })),
-      });
-
-      lobby.currentPlayerIndex++;
-      if (lobby.currentPlayerIndex < lobby.playerOrder.length) {
-        io.to(code).emit('next-player', {
-          currentPlayer: lobby.playerOrder[lobby.currentPlayerIndex],
-          roundEndTime: Date.now() + 60000,
-        });
-      } else {
-        startVoting(lobby);
+        socket.emit('rejoin-failed');
+      } catch (error) {
+        console.error('Error rejoining lobby:', error);
+        socket.emit('rejoin-failed');
       }
     });
 
-    function startVoting(lobby: Lobby) {
-      lobby.state = 'voting';
-      const clues = lobby.players.map((p) => ({
-        id: p.id,
-        name: p.name,
-        clue: p.clue || '(skipped)',
-      }));
+    socket.on('leave-lobby', async (code: string) => {
+      try {
+        if (!currentPlayerId) return;
 
-      io.to(lobby.code).emit('voting-phase', {
-        clues,
-        roundEndTime: Date.now() + 60000,
-      });
-    }
+        const result = await lobbyService.leaveLobby(code, currentPlayerId);
+        
+        socket.leave(code);
+        await sessionService.setPlayerLobby(currentPlayerId, null);
+        currentLobbyCode = null;
 
-    socket.on('submit-vote', ({ code, votedPlayerId }: { code: string; votedPlayerId: string }) => {
-      const lobby = lobbies.get(code);
-      if (!lobby || lobby.state !== 'voting') return;
-
-      const player = lobby.players.find((p) => p.id === socket.id);
-      if (!player || player.hasVoted) return;
-
-      player.vote = votedPlayerId;
-      player.hasVoted = true;
-
-      const votesCount = lobby.players.filter((p) => p.hasVoted).length;
-      io.to(code).emit('vote-cast', { votesCount, totalPlayers: lobby.players.length });
-
-      if (votesCount === lobby.players.length) {
-        showResults(lobby, io);
-      }
-    });
-
-    function showResults(lobby: Lobby, io: Server) {
-      const voteCounts: Record<string, number> = {};
-      lobby.players.forEach((p) => {
-        if (p.vote) {
-          voteCounts[p.vote] = (voteCounts[p.vote] || 0) + 1;
+        if (!result.lobbyDeleted) {
+          io.to(code).emit('player-left', {
+            players: formatPlayersForClient(result.remainingPlayers),
+            leftPlayer: '',
+          });
         }
-      });
+      } catch (error) {
+        console.error('Error leaving lobby:', error);
+      }
+    });
 
-      let mostVoted = '';
-      let maxVotes = 0;
-      for (const [playerId, count] of Object.entries(voteCounts)) {
-        if (count > maxVotes) {
-          maxVotes = count;
-          mostVoted = playerId;
+    socket.on('start-game', async (code: string) => {
+      try {
+        const lobby = await lobbyService.getLobbyState(code);
+        if (!lobby || lobby.hostSocketId !== socket.id) return;
+
+        const result = await gameService.startGame(code);
+        if (!result) return;
+
+        const players = await lobbyService.getLobbyPlayers(code);
+
+        // Send personalized game start to each player
+        for (const player of players) {
+          const isChameleon = player.id === result.chameleonId;
+          io.to(player.socketId).emit('game-started', {
+            category: result.category,
+            allWords: result.allWords,
+            secretWord: isChameleon ? null : result.secretWord,
+            isChameleon,
+            playerOrder: formatPlayersForClient(result.playerOrder),
+            currentPlayer: {
+              id: result.playerOrder[0].socketId,
+              name: result.playerOrder[0].name,
+            },
+            roundEndTime: Date.now() + 60000,
+          });
         }
+
+        console.log(`Game started in lobby ${code}`);
+      } catch (error) {
+        console.error('Error starting game:', error);
+        socket.emit('error', 'Failed to start game');
       }
+    });
 
-      const caughtChameleon = mostVoted === lobby.chameleonId;
-      lobby.mostVoted = mostVoted;
-      lobby.voteCount = maxVotes;
-      lobby.caughtChameleon = caughtChameleon;
+    socket.on('submit-clue', async ({ code, clue }: { code: string; clue: string }) => {
+      try {
+        if (!currentPlayerId) return;
 
-      if (caughtChameleon) {
-        lobby.state = 'chameleon-guessing';
-        const chameleonPlayer = lobby.players.find((p) => p.id === lobby.chameleonId);
-        io.to(lobby.code).emit('chameleon-guess-phase', {
-          chameleonId: lobby.chameleonId!,
-          chameleonName: chameleonPlayer?.name || 'Unknown',
-          allWords: lobby.allWords,
-          category: lobby.category!,
+        const result = await gameService.submitClue(code, currentPlayerId, clue);
+        if (!result.success) return;
+
+        const players = await lobbyService.getLobbyPlayers(code);
+        const player = players.find(p => p.id === currentPlayerId);
+
+        // Broadcast clue to all players
+        io.to(code).emit('clue-submitted', {
+          playerId: socket.id,
+          playerName: player?.name || 'Unknown',
+          clue,
+          clues: [],
         });
-      } else {
-        lobby.chameleonGuessedCorrectly = false;
-        showFinalResults(lobby, io);
+
+        if (result.allCluesSubmitted) {
+          // Start voting phase
+          const lobby = await lobbyService.getLobbyState(code);
+          const clues = players.map(p => ({
+            id: p.socketId,
+            name: p.name,
+            clue: lobby?.clues?.[p.id] || '(skipped)',
+          }));
+
+          io.to(code).emit('voting-phase', {
+            clues,
+            roundEndTime: Date.now() + 60000,
+          });
+        } else if (result.nextPlayerId) {
+          // Notify next player's turn
+          const nextPlayer = players.find(p => p.id === result.nextPlayerId);
+          io.to(code).emit('next-player', {
+            currentPlayer: {
+              id: nextPlayer?.socketId || '',
+              name: nextPlayer?.name || 'Unknown',
+            },
+            roundEndTime: Date.now() + 60000,
+          });
+        }
+      } catch (error) {
+        console.error('Error submitting clue:', error);
+        socket.emit('error', 'Failed to submit clue');
       }
-    }
-
-    function showFinalResults(lobby: Lobby, io: Server) {
-      lobby.state = 'results';
-      const chameleonPlayer = lobby.players.find((p) => p.id === lobby.chameleonId);
-      const mostVotedPlayer = lobby.players.find((p) => p.id === lobby.mostVoted);
-
-      const votes = lobby.players.map((p) => ({
-        name: p.name,
-        votedFor: lobby.players.find((v) => v.id === p.vote)?.name || 'no one',
-      }));
-
-      io.to(lobby.code).emit('game-results', {
-        chameleonId: lobby.chameleonId!,
-        chameleonName: chameleonPlayer?.name || 'Unknown',
-        secretWord: lobby.secretWord!,
-        caughtChameleon: lobby.caughtChameleon,
-        chameleonGuess: lobby.chameleonGuess,
-        chameleonGuessedCorrectly: lobby.chameleonGuessedCorrectly,
-        mostVotedName: mostVotedPlayer?.name || 'Unknown',
-        votes,
-        voteCount: lobby.voteCount,
-      });
-    }
-
-    socket.on('chameleon-guess', ({ code, guess }: { code: string; guess: string }) => {
-      const lobby = lobbies.get(code);
-      if (!lobby || lobby.state !== 'chameleon-guessing') return;
-      if (socket.id !== lobby.chameleonId) return;
-
-      lobby.chameleonGuess = guess;
-      lobby.chameleonGuessedCorrectly =
-        guess.toLowerCase().trim() === lobby.secretWord?.toLowerCase().trim();
-
-      showFinalResults(lobby, io);
     });
 
-    socket.on('play-again', (code: string) => {
-      const lobby = lobbies.get(code);
-      if (!lobby) return;
-      if (lobby.host !== socket.id) return;
+    socket.on('submit-vote', async ({ code, votedPlayerId }: { code: string; votedPlayerId: string }) => {
+      try {
+        if (!currentPlayerId) return;
 
-      lobby.state = 'waiting';
-      lobby.category = null;
-      lobby.secretWord = null;
-      lobby.allWords = [];
-      lobby.chameleonId = null;
-      lobby.playerOrder = [];
-      lobby.currentPlayerIndex = 0;
-      lobby.roundEndTime = null;
-      lobby.mostVoted = null;
-      lobby.voteCount = 0;
-      lobby.caughtChameleon = false;
-      lobby.chameleonGuess = null;
-      lobby.chameleonGuessedCorrectly = false;
+        // Find the actual player ID from socket ID
+        const players = await lobbyService.getLobbyPlayers(code);
+        const targetPlayer = players.find(p => p.socketId === votedPlayerId);
+        if (!targetPlayer) return;
 
-      lobby.players.forEach((p) => {
-        p.clue = null;
-        p.vote = null;
-        p.hasVoted = false;
-      });
+        const result = await gameService.submitVote(code, currentPlayerId, targetPlayer.id);
+        if (!result.success) return;
 
-      io.to(code).emit('reset-lobby', { players: lobby.players });
+        io.to(code).emit('vote-cast', {
+          votesCount: result.votesCount,
+          totalPlayers: players.length,
+        });
+
+        if (result.allVotesIn && result.voteResult) {
+          if (result.voteResult.isChameleon) {
+            // Chameleon was caught - give them a chance to guess
+            const chameleonPlayer = players.find(p => p.id === result.voteResult!.mostVotedId);
+            const lobby = await lobbyService.getLobbyState(code);
+
+            io.to(code).emit('chameleon-guess-phase', {
+              chameleonId: chameleonPlayer?.socketId || '',
+              chameleonName: result.voteResult.mostVotedName,
+              allWords: lobby?.allWords || [],
+              category: lobby?.category || '',
+            });
+          } else {
+            // Chameleon escaped - show results
+            const gameResult = await gameService.getResults(code);
+            if (gameResult) {
+              const chameleonPlayer = players.find(p => p.id === gameResult.chameleonId);
+              io.to(code).emit('game-results', {
+                chameleonId: chameleonPlayer?.socketId || '',
+                chameleonName: gameResult.chameleonName,
+                secretWord: gameResult.secretWord,
+                caughtChameleon: false,
+                chameleonGuess: null,
+                chameleonGuessedCorrectly: false,
+                mostVotedName: result.voteResult.mostVotedName,
+                votes: gameResult.votes,
+                voteCount: result.voteResult.voteCount,
+              });
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error submitting vote:', error);
+        socket.emit('error', 'Failed to submit vote');
+      }
     });
 
-    socket.on('disconnect', () => {
-      const socketId = socket.id;
+    socket.on('chameleon-guess', async ({ code, guess }: { code: string; guess: string }) => {
+      try {
+        const lobby = await lobbyService.getLobbyState(code);
+        if (!lobby || !currentPlayerId || currentPlayerId !== lobby.chameleonId) return;
 
-      for (const [code, lobby] of lobbies) {
-        const playerIndex = lobby.players.findIndex((p) => p.id === socketId);
-        if (playerIndex !== -1) {
-          const player = lobby.players[playerIndex];
-          const playerName = player.name;
+        const result = await gameService.submitGuess(code, guess);
+        if (!result) return;
 
-          player.disconnectedAt = Date.now();
-          player.disconnectedSocketId = socketId;
+        const players = await lobbyService.getLobbyPlayers(code);
+        const chameleonPlayer = players.find(p => p.id === result.chameleonId);
 
-          setTimeout(() => {
-            const currentPlayer = lobby.players.find((p) => p.name === playerName);
-            if (currentPlayer && currentPlayer.disconnectedSocketId === socketId) {
-              const idx = lobby.players.findIndex((p) => p.name === playerName);
-              if (idx !== -1) {
-                lobby.players.splice(idx, 1);
+        io.to(code).emit('game-results', {
+          chameleonId: chameleonPlayer?.socketId || '',
+          chameleonName: result.chameleonName,
+          secretWord: result.secretWord,
+          caughtChameleon: true,
+          chameleonGuess: result.chameleonGuess,
+          chameleonGuessedCorrectly: result.chameleonGuessedCorrectly,
+          mostVotedName: result.chameleonName,
+          votes: result.votes,
+          voteCount: 0,
+        });
+      } catch (error) {
+        console.error('Error submitting guess:', error);
+        socket.emit('error', 'Failed to submit guess');
+      }
+    });
 
-                if (lobby.players.length === 0) {
-                  lobbies.delete(code);
-                  console.log(`Lobby ${code} deleted (empty after disconnect)`);
-                  return;
-                }
+    socket.on('play-again', async (code: string) => {
+      try {
+        const lobby = await lobbyService.getLobbyState(code);
+        if (!lobby || lobby.hostSocketId !== socket.id) return;
 
-                if (currentPlayer.isHost && lobby.players.length > 0) {
-                  lobby.players[0].isHost = true;
-                  lobby.host = lobby.players[0].id;
-                }
+        const result = await gameService.resetLobby(code);
+        if (!result) return;
 
-                if (lobby.state !== 'waiting') {
-                  lobby.state = 'waiting';
-                  lobby.category = null;
-                  lobby.secretWord = null;
-                  lobby.allWords = [];
-                  lobby.chameleonId = null;
-                  lobby.playerOrder = [];
-                  lobby.currentPlayerIndex = 0;
-                  io.to(code).emit('game-interrupted', {
-                    reason: `${playerName} left the game`,
-                    players: lobby.players,
+        io.to(code).emit('reset-lobby', {
+          players: formatPlayersForClient(result.players),
+        });
+      } catch (error) {
+        console.error('Error resetting lobby:', error);
+        socket.emit('error', 'Failed to reset lobby');
+      }
+    });
+
+    socket.on('disconnect', async () => {
+      console.log('Player disconnected:', socket.id);
+
+      try {
+        // Handle disconnect - queue for potential reconnection
+        const session = await sessionService.handleDisconnect(socket.id);
+        
+        if (session && currentLobbyCode) {
+          // Mark player as disconnected in lobby
+          await lobbyService.handlePlayerDisconnect(currentLobbyCode, session.playerId);
+
+          // Wait for grace period then check if player reconnected
+          setTimeout(async () => {
+            const reconnectData = await sessionService.getReconnectionData(session.playerId);
+            if (reconnectData) {
+              // Player didn't reconnect - remove from lobby
+              const result = await lobbyService.leaveLobby(currentLobbyCode!, session.playerId);
+              
+              if (!result.lobbyDeleted) {
+                const lobby = await lobbyService.getLobbyState(currentLobbyCode!);
+                
+                if (lobby && lobby.status !== 'waiting') {
+                  // Game interrupted
+                  io.to(currentLobbyCode!).emit('game-interrupted', {
+                    reason: `${session.playerName} left the game`,
+                    players: formatPlayersForClient(result.remainingPlayers),
                   });
+                  
+                  // Reset to waiting state
+                  await gameService.resetLobby(currentLobbyCode!);
                 } else {
-                  io.to(code).emit('player-left', {
-                    players: lobby.players,
-                    leftPlayer: playerName,
+                  io.to(currentLobbyCode!).emit('player-left', {
+                    players: formatPlayersForClient(result.remainingPlayers),
+                    leftPlayer: session.playerName,
                   });
                 }
               }
+
+              await sessionService.clearReconnection(session.playerId);
             }
-          }, 5000);
-
-          break;
+          }, 5000); // 5 second grace period
         }
+      } catch (error) {
+        console.error('Error handling disconnect:', error);
       }
-
-      console.log('Player disconnected:', socketId);
     });
   });
 

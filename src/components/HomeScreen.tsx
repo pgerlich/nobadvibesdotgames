@@ -1,12 +1,12 @@
-'use client';
+"use client";
 
-import { useState } from 'react';
-import { useGame } from '@/contexts/GameContext';
+import { useGame } from "@/contexts/GameContext";
+import { useState } from "react";
 
 export default function HomeScreen() {
   const { createLobby, joinLobby, error } = useGame();
-  const [name, setName] = useState('');
-  const [code, setCode] = useState('');
+  const [name, setName] = useState("");
+  const [code, setCode] = useState("");
 
   const handleCreate = () => {
     if (!name.trim()) return;
@@ -28,7 +28,9 @@ export default function HomeScreen() {
       </p>
 
       <div className="card">
-        <h2 className="text-xl font-semibold text-center mb-6">Join the Game</h2>
+        <h2 className="text-xl font-semibold text-center mb-6">
+          Join the Game
+        </h2>
 
         <div className="mb-4">
           <label className="block text-sm text-gray-400 mb-2">Your Name</label>
@@ -39,11 +41,15 @@ export default function HomeScreen() {
             placeholder="Enter your name"
             maxLength={20}
             className="input-field"
-            onKeyPress={(e) => e.key === 'Enter' && handleCreate()}
+            onKeyPress={(e) => e.key === "Enter" && handleCreate()}
           />
         </div>
 
-        <button onClick={handleCreate} className="btn-primary w-full" disabled={!name.trim()}>
+        <button
+          onClick={handleCreate}
+          className="btn-primary w-full"
+          disabled={!name.trim()}
+        >
           Create New Lobby
         </button>
 
@@ -62,7 +68,7 @@ export default function HomeScreen() {
             placeholder="Enter 4-letter code"
             maxLength={4}
             className="input-field uppercase"
-            onKeyPress={(e) => e.key === 'Enter' && handleJoin()}
+            onKeyPress={(e) => e.key === "Enter" && handleJoin()}
           />
         </div>
 

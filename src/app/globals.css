@@ -3,7 +3,7 @@
 @theme {
   --font-sans: var(--font-outfit), system-ui, sans-serif;
   --font-serif: var(--font-playfair), Georgia, serif;
-  
+
   --color-gray-950: #0d1117;
   --color-gray-900: #161b22;
   --color-gray-800: #21262d;
@@ -11,7 +11,7 @@
   --color-gray-600: #484f58;
   --color-gray-500: #6e7681;
   --color-gray-400: #8b949e;
-  
+
   --animate-pulse-slow: pulse-slow 15s ease-in-out infinite;
   --animate-fadeIn: fadeIn 0.3s ease;
   --animate-slideUp: slideUp 0.3s ease;
@@ -19,8 +19,13 @@
 }
 
 @keyframes pulse-slow {
-  0%, 100% { opacity: 0.8; }
-  50% { opacity: 1; }
+  0%,
+  100% {
+    opacity: 0.8;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 
 @keyframes fadeIn {

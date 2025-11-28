@@ -1,18 +1,19 @@
-'use client';
+"use client";
 
-import { useGame } from '@/contexts/GameContext';
+import { useGame } from "@/contexts/GameContext";
 
 function getInitials(name: string): string {
   return name
-    .split(' ')
+    .split(" ")
     .map((n) => n[0])
-    .join('')
+    .join("")
     .toUpperCase()
     .slice(0, 2);
 }
 
 export default function LobbyScreen() {
-  const { lobbyCode, players, isHost, myName, startGame, leaveLobby } = useGame();
+  const { lobbyCode, players, isHost, myName, startGame, leaveLobby } =
+    useGame();
   const canStart = players.length >= 3;
 
   return (
@@ -23,7 +24,7 @@ export default function LobbyScreen() {
 
       <div className="card max-w-lg">
         <h2 className="text-xl font-semibold text-center mb-6">Lobby</h2>
-        
+
         <div className="bg-green-400/10 rounded-xl p-5 mb-6 text-center">
           <span className="font-mono text-4xl font-bold tracking-[8px] text-emerald-300">
             {lobbyCode}
@@ -68,10 +69,12 @@ export default function LobbyScreen() {
             className="btn-primary w-full"
             disabled={!canStart}
           >
-            {canStart ? 'Start Game' : 'Start Game (3+ players needed)'}
+            {canStart ? "Start Game" : "Start Game (3+ players needed)"}
           </button>
         ) : (
-          <p className="text-center text-gray-400">Waiting for host to start...</p>
+          <p className="text-center text-gray-400">
+            Waiting for host to start...
+          </p>
         )}
 
         <button onClick={leaveLobby} className="btn-secondary w-full mt-4">

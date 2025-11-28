@@ -1,10 +1,10 @@
-'use client';
+"use client";
 
-import { useState } from 'react';
+import { useState } from "react";
 
 const VenmoIcon = () => (
   <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-    <path d="M19.5 2H4.5C3.12 2 2 3.12 2 4.5v15c0 1.38 1.12 2.5 2.5 2.5h15c1.38 0 2.5-1.12 2.5-2.5v-15C22 3.12 20.88 2 19.5 2zm-3.3 6.06c0 2.66-1.88 6.5-3.4 9.08H9.02L7.37 7.44l3.3-.32.9 7.16c.84-1.4 1.87-3.58 1.87-5.06 0-.76-.13-1.3-.3-1.74l2.86-.6c.27.66.4 1.38.4 2.18z"/>
+    <path d="M19.5 2H4.5C3.12 2 2 3.12 2 4.5v15c0 1.38 1.12 2.5 2.5 2.5h15c1.38 0 2.5-1.12 2.5-2.5v-15C22 3.12 20.88 2 19.5 2zm-3.3 6.06c0 2.66-1.88 6.5-3.4 9.08H9.02L7.37 7.44l3.3-.32.9 7.16c.84-1.4 1.87-3.58 1.87-5.06 0-.76-.13-1.3-.3-1.74l2.86-.6c.27.66.4 1.38.4 2.18z" />
   </svg>
 );
 
@@ -29,7 +29,7 @@ export default function CoffeeSection() {
             <p className="text-gray-400 text-sm mb-3">
               Thanks for playing! Tips help keep the server running 💚
             </p>
-            
+
             <div className="flex gap-3 justify-center flex-wrap">
               <a
                 href={venmoUrl(1)}

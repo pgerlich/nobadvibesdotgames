@@ -1,6 +1,6 @@
-'use client';
+"use client";
 
-import { useGame } from '@/contexts/GameContext';
+import { useGame } from "@/contexts/GameContext";
 
 export default function ConnectionStatus() {
   const { connectionStatus, error } = useGame();

@@ -1,6 +1,6 @@
+import { GameProvider } from "@/contexts/GameContext";
 import type { Metadata } from "next";
 import { Outfit, Playfair_Display } from "next/font/google";
-import { GameProvider } from "@/contexts/GameContext";
 import "./globals.css";
 
 const outfit = Outfit({
@@ -17,7 +17,8 @@ const playfair = Playfair_Display({
 
 export const metadata: Metadata = {
   title: "🕵️ Undercover | nobadvibes.games",
-  description: "A social deduction party game. One of you doesn't belong. Find them.",
+  description:
+    "A social deduction party game. One of you doesn't belong. Find them.",
 };
 
 export default function RootLayout({
@@ -27,10 +28,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${outfit.variable} ${playfair.variable} font-sans antialiased bg-gray-950 text-white`}>
-        <GameProvider>
-          {children}
-        </GameProvider>
+      <body
+        className={`${outfit.variable} ${playfair.variable} font-sans antialiased bg-gray-950 text-white`}
+      >
+        <GameProvider>{children}</GameProvider>
       </body>
     </html>
   );
