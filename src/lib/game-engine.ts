@@ -1,11 +1,89 @@
 // Game categories and words
 export const CATEGORIES: Record<string, string[]> = {
-  'Animals': ['Dog', 'Cat', 'Elephant', 'Giraffe', 'Lion', 'Tiger', 'Bear', 'Wolf', 'Fox', 'Rabbit', 'Deer', 'Horse'],
-  'Food': ['Pizza', 'Burger', 'Sushi', 'Pasta', 'Taco', 'Salad', 'Steak', 'Sandwich', 'Soup', 'Curry', 'Ramen', 'Burrito'],
-  'Movies': ['Titanic', 'Avatar', 'Inception', 'Jaws', 'Matrix', 'Frozen', 'Shrek', 'Gladiator', 'Psycho', 'Rocky', 'Alien', 'Joker'],
-  'Sports': ['Soccer', 'Basketball', 'Tennis', 'Golf', 'Baseball', 'Hockey', 'Cricket', 'Rugby', 'Boxing', 'Swimming', 'Cycling', 'Skiing'],
-  'Countries': ['France', 'Japan', 'Brazil', 'Egypt', 'Canada', 'Australia', 'Mexico', 'Italy', 'India', 'Germany', 'Spain', 'China'],
-  'Professions': ['Doctor', 'Teacher', 'Chef', 'Pilot', 'Lawyer', 'Artist', 'Engineer', 'Nurse', 'Firefighter', 'Police', 'Astronaut', 'Scientist'],
+  Animals: [
+    "Dog",
+    "Cat",
+    "Elephant",
+    "Giraffe",
+    "Lion",
+    "Tiger",
+    "Bear",
+    "Wolf",
+    "Fox",
+    "Rabbit",
+    "Deer",
+    "Horse",
+  ],
+  Food: [
+    "Pizza",
+    "Burger",
+    "Sushi",
+    "Pasta",
+    "Taco",
+    "Salad",
+    "Steak",
+    "Sandwich",
+    "Soup",
+    "Curry",
+    "Ramen",
+    "Burrito",
+  ],
+  Movies: [
+    "Titanic",
+    "Avatar",
+    "Inception",
+    "Jaws",
+    "Matrix",
+    "Frozen",
+    "Shrek",
+    "Gladiator",
+    "Psycho",
+    "Rocky",
+    "Alien",
+    "Joker",
+  ],
+  Sports: [
+    "Soccer",
+    "Basketball",
+    "Tennis",
+    "Golf",
+    "Baseball",
+    "Hockey",
+    "Cricket",
+    "Rugby",
+    "Boxing",
+    "Swimming",
+    "Cycling",
+    "Skiing",
+  ],
+  Countries: [
+    "France",
+    "Japan",
+    "Brazil",
+    "Egypt",
+    "Canada",
+    "Australia",
+    "Mexico",
+    "Italy",
+    "India",
+    "Germany",
+    "Spain",
+    "China",
+  ],
+  Professions: [
+    "Doctor",
+    "Teacher",
+    "Chef",
+    "Pilot",
+    "Lawyer",
+    "Artist",
+    "Engineer",
+    "Nurse",
+    "Firefighter",
+    "Police",
+    "Astronaut",
+    "Scientist",
+  ],
 };
 
 export interface Player {
@@ -17,7 +95,7 @@ export interface Player {
 }
 
 export interface GameState {
-  phase: 'waiting' | 'playing' | 'voting' | 'chameleon-guessing' | 'results';
+  phase: "waiting" | "playing" | "voting" | "chameleon-guessing" | "results";
   category?: string;
   secretWord?: string;
   allWords?: string[];
@@ -40,8 +118,8 @@ export interface GameState {
 }
 
 export function generateLobbyCode(): string {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
-  let code = '';
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+  let code = "";
   for (let i = 0; i < 4; i++) {
     code += chars.charAt(Math.floor(Math.random() * chars.length));
   }
@@ -70,7 +148,8 @@ export function startGameRound(players: Player[]): {
 } {
   // Select random category and word
   const categoryNames = Object.keys(CATEGORIES);
-  const category = categoryNames[Math.floor(Math.random() * categoryNames.length)];
+  const category =
+    categoryNames[Math.floor(Math.random() * categoryNames.length)];
   const words = CATEGORIES[category];
   const secretWord = words[Math.floor(Math.random() * words.length)];
 
@@ -79,7 +158,7 @@ export function startGameRound(players: Player[]): {
   const chameleonId = players[chameleonIndex].id;
 
   // Shuffle player order
-  const playerOrder = shuffleArray(players.map(p => p.id));
+  const playerOrder = shuffleArray(players.map((p) => p.id));
 
   return {
     category,
@@ -90,19 +169,22 @@ export function startGameRound(players: Player[]): {
   };
 }
 
-export function tallyVotes(votes: Record<string, string>, players: Player[]): {
+export function tallyVotes(
+  votes: Record<string, string>,
+  players: Player[]
+): {
   mostVotedId: string;
   mostVotedName: string;
   voteCount: number;
   voteResults: Array<{ name: string; votedFor: string }>;
 } {
   const voteTally: Record<string, number> = {};
-  
+
   for (const targetId of Object.values(votes)) {
     voteTally[targetId] = (voteTally[targetId] || 0) + 1;
   }
 
-  let mostVotedId = '';
+  let mostVotedId = "";
   let maxVotes = 0;
   for (const [id, count] of Object.entries(voteTally)) {
     if (count > maxVotes) {
@@ -111,16 +193,16 @@ export function tallyVotes(votes: Record<string, string>, players: Player[]): {
     }
   }
 
-  const mostVotedPlayer = players.find(p => p.id === mostVotedId);
+  const mostVotedPlayer = players.find((p) => p.id === mostVotedId);
 
   const voteResults = Object.entries(votes).map(([casterId, targetId]) => ({
-    name: players.find(p => p.id === casterId)?.name || 'Unknown',
-    votedFor: players.find(p => p.id === targetId)?.name || 'Unknown',
+    name: players.find((p) => p.id === casterId)?.name || "Unknown",
+    votedFor: players.find((p) => p.id === targetId)?.name || "Unknown",
   }));
 
   return {
     mostVotedId,
-    mostVotedName: mostVotedPlayer?.name || 'Unknown',
+    mostVotedName: mostVotedPlayer?.name || "Unknown",
     voteCount: maxVotes,
     voteResults,
   };

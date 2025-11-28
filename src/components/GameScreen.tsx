@@ -1,7 +1,7 @@
 "use client";
 
 import { useGame } from "@/contexts/GameContext";
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 
 function getInitials(name: string): string {
   return name
@@ -80,7 +80,8 @@ function CluePhase() {
   const [hasSubmitted, setHasSubmitted] = useState(false);
 
   const isMyTurn = currentPlayerId === myId;
-  const currentPlayerName = players.find(p => p.id === currentPlayerId)?.name || "...";
+  const currentPlayerName =
+    players.find((p) => p.id === currentPlayerId)?.name || "...";
 
   // Reset submission state when turn changes
   useEffect(() => {
@@ -98,8 +99,8 @@ function CluePhase() {
   };
 
   // Convert clues record to display format
-  const cluesList = playerOrder.map(playerId => {
-    const player = players.find(p => p.id === playerId);
+  const cluesList = playerOrder.map((playerId) => {
+    const player = players.find((p) => p.id === playerId);
     return {
       id: playerId,
       name: player?.name || "Unknown",
@@ -221,8 +222,8 @@ function VotePhase() {
   };
 
   // Convert clues to display format
-  const cluesList = playerOrder.map(playerId => {
-    const player = players.find(p => p.id === playerId);
+  const cluesList = playerOrder.map((playerId) => {
+    const player = players.find((p) => p.id === playerId);
     return {
       id: playerId,
       name: player?.name || "Unknown",

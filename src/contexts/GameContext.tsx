@@ -1,6 +1,16 @@
 "use client";
 
 import {
+  GameState,
+  generateLobbyCode,
+  generatePlayerId,
+  Player,
+  startGameRound,
+  tallyVotes,
+} from "@/lib/game-engine";
+import { supabase } from "@/lib/supabase";
+import { RealtimeChannel } from "@supabase/supabase-js";
+import {
   createContext,
   ReactNode,
   useCallback,
@@ -9,17 +19,6 @@ import {
   useRef,
   useState,
 } from "react";
-import { RealtimeChannel } from "@supabase/supabase-js";
-import { supabase } from "@/lib/supabase";
-import {
-  Player,
-  GameState,
-  generateLobbyCode,
-  generatePlayerId,
-  startGameRound,
-  tallyVotes,
-  CATEGORIES,
-} from "@/lib/game-engine";
 
 interface GameContextType {
   // Connection
@@ -53,7 +52,12 @@ interface GameContextType {
 
   // Results
   gameResults: GameState["results"] | null;
-  guessPhaseData: { chameleonId: string; chameleonName: string; allWords: string[]; category: string } | null;
+  guessPhaseData: {
+    chameleonId: string;
+    chameleonName: string;
+    allWords: string[];
+    category: string;
+  } | null;
 
   // Actions
   createLobby: (name: string) => void;
@@ -97,7 +101,9 @@ export function GameProvider({ children }: { children: ReactNode }) {
   const [votesCount, setVotesCount] = useState(0);
   const [selectedVote, setSelectedVote] = useState<string | null>(null);
 
-  const [gameResults, setGameResults] = useState<GameState["results"] | null>(null);
+  const [gameResults, setGameResults] = useState<GameState["results"] | null>(
+    null
+  );
   const [guessPhaseData, setGuessPhaseData] = useState<{
     chameleonId: string;
     chameleonName: string;
@@ -148,125 +154,140 @@ export function GameProvider({ children }: { children: ReactNode }) {
   }, []);
 
   // Join a Supabase channel for the lobby
-  const joinChannel = useCallback((code: string, playerName: string, asHost: boolean) => {
-    if (channelRef.current) {
-      supabase.removeChannel(channelRef.current);
-    }
+  const joinChannel = useCallback(
+    (code: string, playerName: string, asHost: boolean) => {
+      if (channelRef.current) {
+        supabase.removeChannel(channelRef.current);
+      }
 
-    const channel = supabase.channel(`game:${code}`, {
-      config: {
-        presence: { key: myId },
-        broadcast: { self: true },
-      },
-    });
-
-    // Handle presence (players joining/leaving)
-    channel.on("presence", { event: "sync" }, () => {
-      const presenceState = channel.presenceState();
-      const playerList: Player[] = Object.entries(presenceState).map(([id, data]) => {
-        const playerData = (data as any[])[0];
-        return {
-          id,
-          name: playerData.name,
-          isHost: playerData.isHost,
-          clue: playerData.clue,
-        };
+      const channel = supabase.channel(`game:${code}`, {
+        config: {
+          presence: { key: myId },
+          broadcast: { self: true },
+        },
       });
-      setPlayers(playerList);
-      
-      // Check if we're now the host (if original host left)
-      if (playerList.length > 0 && !playerList.some(p => p.isHost)) {
-        // No host - first player becomes host
-        if (playerList[0].id === myId) {
-          setIsHost(true);
-          channel.track({ name: playerName, isHost: true });
+
+      // Handle presence (players joining/leaving)
+      channel.on("presence", { event: "sync" }, () => {
+        const presenceState = channel.presenceState();
+        const playerList: Player[] = Object.entries(presenceState).map(
+          ([id, data]) => {
+            const playerData = (data as any[])[0];
+            return {
+              id,
+              name: playerData.name,
+              isHost: playerData.isHost,
+              clue: playerData.clue,
+            };
+          }
+        );
+        setPlayers(playerList);
+
+        // Check if we're now the host (if original host left)
+        if (playerList.length > 0 && !playerList.some((p) => p.isHost)) {
+          // No host - first player becomes host
+          if (playerList[0].id === myId) {
+            setIsHost(true);
+            channel.track({ name: playerName, isHost: true });
+          }
         }
-      }
-    });
+      });
 
-    // Handle game broadcasts
-    channel.on("broadcast", { event: "game-start" }, ({ payload }) => {
-      const { category, allWords, secretWord, chameleonId: chamId, playerOrder: order } = payload;
-      setCategory(category);
-      setAllWords(allWords);
-      setSecretWord(chamId === myId ? null : secretWord);
-      setIsChameleon(chamId === myId);
-      setChameleonId(chamId);
-      setPlayerOrder(order);
-      setCurrentPlayerIndex(0);
-      setClues({});
-      setVotes({});
-      setGamePhase("playing");
-      setGameResults(null);
-      setGuessPhaseData(null);
-    });
+      // Handle game broadcasts
+      channel.on("broadcast", { event: "game-start" }, ({ payload }) => {
+        const {
+          category,
+          allWords,
+          secretWord,
+          chameleonId: chamId,
+          playerOrder: order,
+        } = payload;
+        setCategory(category);
+        setAllWords(allWords);
+        setSecretWord(chamId === myId ? null : secretWord);
+        setIsChameleon(chamId === myId);
+        setChameleonId(chamId);
+        setPlayerOrder(order);
+        setCurrentPlayerIndex(0);
+        setClues({});
+        setVotes({});
+        setGamePhase("playing");
+        setGameResults(null);
+        setGuessPhaseData(null);
+      });
 
-    channel.on("broadcast", { event: "clue-submitted" }, ({ payload }) => {
-      const { playerId, clue, nextIndex } = payload;
-      setClues(prev => ({ ...prev, [playerId]: clue }));
-      setCurrentPlayerIndex(nextIndex);
-    });
+      channel.on("broadcast", { event: "clue-submitted" }, ({ payload }) => {
+        const { playerId, clue, nextIndex } = payload;
+        setClues((prev) => ({ ...prev, [playerId]: clue }));
+        setCurrentPlayerIndex(nextIndex);
+      });
 
-    channel.on("broadcast", { event: "voting-phase" }, ({ payload }) => {
-      setClues(payload.clues);
-      setGamePhase("voting");
-      setVotes({});
-      setVotesCount(0);
-      setSelectedVote(null);
-    });
+      channel.on("broadcast", { event: "voting-phase" }, ({ payload }) => {
+        setClues(payload.clues);
+        setGamePhase("voting");
+        setVotes({});
+        setVotesCount(0);
+        setSelectedVote(null);
+      });
 
-    channel.on("broadcast", { event: "vote-submitted" }, ({ payload }) => {
-      const { votes: newVotes } = payload;
-      setVotes(newVotes);
-      setVotesCount(Object.keys(newVotes).length);
-    });
+      channel.on("broadcast", { event: "vote-submitted" }, ({ payload }) => {
+        const { votes: newVotes } = payload;
+        setVotes(newVotes);
+        setVotesCount(Object.keys(newVotes).length);
+      });
 
-    channel.on("broadcast", { event: "chameleon-guess-phase" }, ({ payload }) => {
-      setGuessPhaseData(payload);
-      setGamePhase("chameleon-guessing");
-    });
+      channel.on(
+        "broadcast",
+        { event: "chameleon-guess-phase" },
+        ({ payload }) => {
+          setGuessPhaseData(payload);
+          setGamePhase("chameleon-guessing");
+        }
+      );
 
-    channel.on("broadcast", { event: "game-results" }, ({ payload }) => {
-      setGameResults(payload);
-      setGamePhase("results");
-    });
+      channel.on("broadcast", { event: "game-results" }, ({ payload }) => {
+        setGameResults(payload);
+        setGamePhase("results");
+      });
 
-    channel.on("broadcast", { event: "play-again" }, () => {
-      setGamePhase("waiting");
-      setCategory("");
-      setSecretWord(null);
-      setAllWords([]);
-      setIsChameleon(false);
-      setPlayerOrder([]);
-      setCurrentPlayerIndex(0);
-      setClues({});
-      setVotes({});
-      setGameResults(null);
-      setGuessPhaseData(null);
-    });
+      channel.on("broadcast", { event: "play-again" }, () => {
+        setGamePhase("waiting");
+        setCategory("");
+        setSecretWord(null);
+        setAllWords([]);
+        setIsChameleon(false);
+        setPlayerOrder([]);
+        setCurrentPlayerIndex(0);
+        setClues({});
+        setVotes({});
+        setGameResults(null);
+        setGuessPhaseData(null);
+      });
 
-    channel.subscribe(async (status) => {
-      if (status === "SUBSCRIBED") {
-        setIsConnected(true);
-        setConnectionStatus(null);
-        
-        // Track presence
-        await channel.track({
-          name: playerName,
-          isHost: asHost,
-        });
-      } else if (status === "CHANNEL_ERROR") {
-        setConnectionStatus("Connection error. Retrying...");
-      } else if (status === "TIMED_OUT") {
-        setConnectionStatus("Connection timed out. Retrying...");
-      }
-    });
+      channel.subscribe(async (status) => {
+        if (status === "SUBSCRIBED") {
+          setIsConnected(true);
+          setConnectionStatus(null);
 
-    channelRef.current = channel;
-    setLobbyCode(code);
-    setIsHost(asHost);
-    setMyName(playerName);
-  }, [myId]);
+          // Track presence
+          await channel.track({
+            name: playerName,
+            isHost: asHost,
+          });
+        } else if (status === "CHANNEL_ERROR") {
+          setConnectionStatus("Connection error. Retrying...");
+        } else if (status === "TIMED_OUT") {
+          setConnectionStatus("Connection timed out. Retrying...");
+        }
+      });
+
+      channelRef.current = channel;
+      setLobbyCode(code);
+      setIsHost(asHost);
+      setMyName(playerName);
+    },
+    [myId]
+  );
 
   // Auto-rejoin from session
   useEffect(() => {
@@ -302,14 +323,20 @@ export function GameProvider({ children }: { children: ReactNode }) {
   }, [lobbyCode, myName, saveSession]);
 
   // Actions
-  const createLobby = useCallback((name: string) => {
-    const code = generateLobbyCode();
-    joinChannel(code, name, true);
-  }, [joinChannel]);
+  const createLobby = useCallback(
+    (name: string) => {
+      const code = generateLobbyCode();
+      joinChannel(code, name, true);
+    },
+    [joinChannel]
+  );
 
-  const joinLobby = useCallback((code: string, name: string) => {
-    joinChannel(code.toUpperCase(), name, false);
-  }, [joinChannel]);
+  const joinLobby = useCallback(
+    (code: string, name: string) => {
+      joinChannel(code.toUpperCase(), name, false);
+    },
+    [joinChannel]
+  );
 
   const leaveLobby = useCallback(() => {
     if (channelRef.current) {
@@ -328,7 +355,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
     if (!isHost || players.length < 3) return;
 
     const gameData = startGameRound(players);
-    
+
     channelRef.current?.send({
       type: "broadcast",
       event: "game-start",
@@ -336,36 +363,39 @@ export function GameProvider({ children }: { children: ReactNode }) {
     });
   }, [isHost, players]);
 
-  const submitClue = useCallback((clue: string) => {
-    if (currentPlayerId !== myId) return;
+  const submitClue = useCallback(
+    (clue: string) => {
+      if (currentPlayerId !== myId) return;
 
-    const nextIndex = currentPlayerIndex + 1;
-    const allCluesSubmitted = nextIndex >= players.length;
+      const nextIndex = currentPlayerIndex + 1;
+      const allCluesSubmitted = nextIndex >= players.length;
 
-    channelRef.current?.send({
-      type: "broadcast",
-      event: "clue-submitted",
-      payload: { playerId: myId, clue, nextIndex },
-    });
+      channelRef.current?.send({
+        type: "broadcast",
+        event: "clue-submitted",
+        payload: { playerId: myId, clue, nextIndex },
+      });
 
-    if (allCluesSubmitted && isHost) {
-      // Gather all clues and transition to voting
-      const allClues = { ...clues, [myId]: clue };
-      setTimeout(() => {
-        channelRef.current?.send({
-          type: "broadcast",
-          event: "voting-phase",
-          payload: { clues: allClues },
-        });
-      }, 500);
-    }
-  }, [currentPlayerId, myId, currentPlayerIndex, players.length, isHost, clues]);
+      if (allCluesSubmitted && isHost) {
+        // Gather all clues and transition to voting
+        const allClues = { ...clues, [myId]: clue };
+        setTimeout(() => {
+          channelRef.current?.send({
+            type: "broadcast",
+            event: "voting-phase",
+            payload: { clues: allClues },
+          });
+        }, 500);
+      }
+    },
+    [currentPlayerId, myId, currentPlayerIndex, players.length, isHost, clues]
+  );
 
   const submitVote = useCallback(() => {
     if (!selectedVote) return;
 
     const newVotes = { ...votes, [myId]: selectedVote };
-    
+
     channelRef.current?.send({
       type: "broadcast",
       event: "vote-submitted",
@@ -375,9 +405,10 @@ export function GameProvider({ children }: { children: ReactNode }) {
     // Check if all votes are in
     if (Object.keys(newVotes).length >= players.length && isHost) {
       setTimeout(() => {
-        const { mostVotedId, mostVotedName, voteCount, voteResults } = tallyVotes(newVotes, players);
+        const { mostVotedId, mostVotedName, voteCount, voteResults } =
+          tallyVotes(newVotes, players);
         const isChameleonCaught = mostVotedId === chameleonId;
-        const chameleonPlayer = players.find(p => p.id === chameleonId);
+        const chameleonPlayer = players.find((p) => p.id === chameleonId);
 
         if (isChameleonCaught) {
           // Give chameleon a chance to guess
@@ -409,31 +440,45 @@ export function GameProvider({ children }: { children: ReactNode }) {
         }
       }, 500);
     }
-  }, [selectedVote, votes, myId, players, isHost, chameleonId, allWords, category, secretWord]);
+  }, [
+    selectedVote,
+    votes,
+    myId,
+    players,
+    isHost,
+    chameleonId,
+    allWords,
+    category,
+    secretWord,
+  ]);
 
-  const submitGuess = useCallback((guess: string) => {
-    if (myId !== chameleonId) return;
+  const submitGuess = useCallback(
+    (guess: string) => {
+      if (myId !== chameleonId) return;
 
-    const guessCorrect = guess.toLowerCase().trim() === secretWord?.toLowerCase().trim();
-    const chameleonPlayer = players.find(p => p.id === chameleonId);
+      const guessCorrect =
+        guess.toLowerCase().trim() === secretWord?.toLowerCase().trim();
+      const chameleonPlayer = players.find((p) => p.id === chameleonId);
 
-    channelRef.current?.send({
-      type: "broadcast",
-      event: "game-results",
-      payload: {
-        chameleonId,
-        chameleonName: chameleonPlayer?.name || "Unknown",
-        secretWord,
-        caughtChameleon: true,
-        chameleonGuess: guess,
-        chameleonGuessedCorrectly: guessCorrect,
-        votes: Object.entries(votes).map(([casterId, targetId]) => ({
-          name: players.find(p => p.id === casterId)?.name || "Unknown",
-          votedFor: players.find(p => p.id === targetId)?.name || "Unknown",
-        })),
-      },
-    });
-  }, [myId, chameleonId, secretWord, players, votes]);
+      channelRef.current?.send({
+        type: "broadcast",
+        event: "game-results",
+        payload: {
+          chameleonId,
+          chameleonName: chameleonPlayer?.name || "Unknown",
+          secretWord,
+          caughtChameleon: true,
+          chameleonGuess: guess,
+          chameleonGuessedCorrectly: guessCorrect,
+          votes: Object.entries(votes).map(([casterId, targetId]) => ({
+            name: players.find((p) => p.id === casterId)?.name || "Unknown",
+            votedFor: players.find((p) => p.id === targetId)?.name || "Unknown",
+          })),
+        },
+      });
+    },
+    [myId, chameleonId, secretWord, players, votes]
+  );
 
   const playAgain = useCallback(() => {
     if (!isHost) return;

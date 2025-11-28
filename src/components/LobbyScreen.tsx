@@ -12,8 +12,7 @@ function getInitials(name: string): string {
 }
 
 export default function LobbyScreen() {
-  const { lobbyCode, players, isHost, myId, startGame, leaveLobby } =
-    useGame();
+  const { lobbyCode, players, isHost, myId, startGame, leaveLobby } = useGame();
   const canStart = players.length >= 3;
 
   return (
