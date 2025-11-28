@@ -1,30 +1,33 @@
 "use client";
 
-import type {
-  ChameleonGuessPhasePayload,
-  GameResultsPayload,
-  GameStartedPayload,
-  GameState,
-  Player,
-  VotingPhasePayload,
-} from "@/types/game";
 import {
   createContext,
   ReactNode,
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
 } from "react";
-import { io, Socket } from "socket.io-client";
+import { RealtimeChannel } from "@supabase/supabase-js";
+import { supabase } from "@/lib/supabase";
+import {
+  Player,
+  GameState,
+  generateLobbyCode,
+  generatePlayerId,
+  startGameRound,
+  tallyVotes,
+  CATEGORIES,
+} from "@/lib/game-engine";
 
 interface GameContextType {
   // Connection
-  socket: Socket | null;
   isConnected: boolean;
   connectionStatus: string | null;
 
   // Player state
+  myId: string;
   myName: string;
   setMyName: (name: string) => void;
   isHost: boolean;
@@ -33,15 +36,15 @@ interface GameContextType {
   // Lobby state
   lobbyCode: string;
   players: Player[];
-  gameState: GameState;
+  gamePhase: GameState["phase"];
 
   // Game state
   category: string;
   secretWord: string | null;
   allWords: string[];
-  playerOrder: Player[];
-  currentPlayer: Player | null;
-  clues: Array<{ id: string; name: string; clue: string | null }>;
+  playerOrder: string[];
+  currentPlayerId: string | null;
+  clues: Record<string, string>;
 
   // Voting
   votesCount: number;
@@ -49,8 +52,8 @@ interface GameContextType {
   setSelectedVote: (id: string | null) => void;
 
   // Results
-  gameResults: GameResultsPayload | null;
-  guessPhaseData: ChameleonGuessPhasePayload | null;
+  gameResults: GameState["results"] | null;
+  guessPhaseData: { chameleonId: string; chameleonName: string; allWords: string[]; category: string } | null;
 
   // Actions
   createLobby: (name: string) => void;
@@ -70,37 +73,53 @@ interface GameContextType {
 const GameContext = createContext<GameContextType | null>(null);
 
 export function GameProvider({ children }: { children: ReactNode }) {
-  const [socket, setSocket] = useState<Socket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<string | null>(null);
 
+  const [myId, setMyId] = useState("");
   const [myName, setMyName] = useState("");
   const [isHost, setIsHost] = useState(false);
   const [isChameleon, setIsChameleon] = useState(false);
 
   const [lobbyCode, setLobbyCode] = useState("");
   const [players, setPlayers] = useState<Player[]>([]);
-  const [gameState, setGameState] = useState<GameState>("waiting");
+  const [gamePhase, setGamePhase] = useState<GameState["phase"]>("waiting");
 
   const [category, setCategory] = useState("");
   const [secretWord, setSecretWord] = useState<string | null>(null);
   const [allWords, setAllWords] = useState<string[]>([]);
-  const [playerOrder, setPlayerOrder] = useState<Player[]>([]);
-  const [currentPlayer, setCurrentPlayer] = useState<Player | null>(null);
-  const [clues, setClues] = useState<
-    Array<{ id: string; name: string; clue: string | null }>
-  >([]);
+  const [playerOrder, setPlayerOrder] = useState<string[]>([]);
+  const [currentPlayerIndex, setCurrentPlayerIndex] = useState(0);
+  const [chameleonId, setChameleonId] = useState<string | null>(null);
+  const [clues, setClues] = useState<Record<string, string>>({});
 
+  const [votes, setVotes] = useState<Record<string, string>>({});
   const [votesCount, setVotesCount] = useState(0);
   const [selectedVote, setSelectedVote] = useState<string | null>(null);
 
-  const [gameResults, setGameResults] = useState<GameResultsPayload | null>(
-    null
-  );
-  const [guessPhaseData, setGuessPhaseData] =
-    useState<ChameleonGuessPhasePayload | null>(null);
+  const [gameResults, setGameResults] = useState<GameState["results"] | null>(null);
+  const [guessPhaseData, setGuessPhaseData] = useState<{
+    chameleonId: string;
+    chameleonName: string;
+    allWords: string[];
+    category: string;
+  } | null>(null);
 
   const [error, setError] = useState<string | null>(null);
+
+  const channelRef = useRef<RealtimeChannel | null>(null);
+
+  // Initialize player ID
+  useEffect(() => {
+    let storedId = localStorage.getItem("player_id");
+    if (!storedId) {
+      storedId = generatePlayerId();
+      localStorage.setItem("player_id", storedId);
+    }
+    setMyId(storedId);
+  }, []);
+
+  const currentPlayerId = playerOrder[currentPlayerIndex] || null;
 
   // Session management
   const saveSession = useCallback(() => {
@@ -128,15 +147,139 @@ export function GameProvider({ children }: { children: ReactNode }) {
     window.history.replaceState({}, "", url);
   }, []);
 
-  const loadSession = useCallback(() => {
-    if (typeof window === "undefined") return null;
+  // Join a Supabase channel for the lobby
+  const joinChannel = useCallback((code: string, playerName: string, asHost: boolean) => {
+    if (channelRef.current) {
+      supabase.removeChannel(channelRef.current);
+    }
+
+    const channel = supabase.channel(`game:${code}`, {
+      config: {
+        presence: { key: myId },
+        broadcast: { self: true },
+      },
+    });
+
+    // Handle presence (players joining/leaving)
+    channel.on("presence", { event: "sync" }, () => {
+      const presenceState = channel.presenceState();
+      const playerList: Player[] = Object.entries(presenceState).map(([id, data]) => {
+        const playerData = (data as any[])[0];
+        return {
+          id,
+          name: playerData.name,
+          isHost: playerData.isHost,
+          clue: playerData.clue,
+        };
+      });
+      setPlayers(playerList);
+      
+      // Check if we're now the host (if original host left)
+      if (playerList.length > 0 && !playerList.some(p => p.isHost)) {
+        // No host - first player becomes host
+        if (playerList[0].id === myId) {
+          setIsHost(true);
+          channel.track({ name: playerName, isHost: true });
+        }
+      }
+    });
+
+    // Handle game broadcasts
+    channel.on("broadcast", { event: "game-start" }, ({ payload }) => {
+      const { category, allWords, secretWord, chameleonId: chamId, playerOrder: order } = payload;
+      setCategory(category);
+      setAllWords(allWords);
+      setSecretWord(chamId === myId ? null : secretWord);
+      setIsChameleon(chamId === myId);
+      setChameleonId(chamId);
+      setPlayerOrder(order);
+      setCurrentPlayerIndex(0);
+      setClues({});
+      setVotes({});
+      setGamePhase("playing");
+      setGameResults(null);
+      setGuessPhaseData(null);
+    });
+
+    channel.on("broadcast", { event: "clue-submitted" }, ({ payload }) => {
+      const { playerId, clue, nextIndex } = payload;
+      setClues(prev => ({ ...prev, [playerId]: clue }));
+      setCurrentPlayerIndex(nextIndex);
+    });
+
+    channel.on("broadcast", { event: "voting-phase" }, ({ payload }) => {
+      setClues(payload.clues);
+      setGamePhase("voting");
+      setVotes({});
+      setVotesCount(0);
+      setSelectedVote(null);
+    });
+
+    channel.on("broadcast", { event: "vote-submitted" }, ({ payload }) => {
+      const { votes: newVotes } = payload;
+      setVotes(newVotes);
+      setVotesCount(Object.keys(newVotes).length);
+    });
+
+    channel.on("broadcast", { event: "chameleon-guess-phase" }, ({ payload }) => {
+      setGuessPhaseData(payload);
+      setGamePhase("chameleon-guessing");
+    });
+
+    channel.on("broadcast", { event: "game-results" }, ({ payload }) => {
+      setGameResults(payload);
+      setGamePhase("results");
+    });
+
+    channel.on("broadcast", { event: "play-again" }, () => {
+      setGamePhase("waiting");
+      setCategory("");
+      setSecretWord(null);
+      setAllWords([]);
+      setIsChameleon(false);
+      setPlayerOrder([]);
+      setCurrentPlayerIndex(0);
+      setClues({});
+      setVotes({});
+      setGameResults(null);
+      setGuessPhaseData(null);
+    });
+
+    channel.subscribe(async (status) => {
+      if (status === "SUBSCRIBED") {
+        setIsConnected(true);
+        setConnectionStatus(null);
+        
+        // Track presence
+        await channel.track({
+          name: playerName,
+          isHost: asHost,
+        });
+      } else if (status === "CHANNEL_ERROR") {
+        setConnectionStatus("Connection error. Retrying...");
+      } else if (status === "TIMED_OUT") {
+        setConnectionStatus("Connection timed out. Retrying...");
+      }
+    });
+
+    channelRef.current = channel;
+    setLobbyCode(code);
+    setIsHost(asHost);
+    setMyName(playerName);
+  }, [myId]);
+
+  // Auto-rejoin from session
+  useEffect(() => {
+    if (!myId) return;
 
     const url = new URL(window.location.href);
     const roomFromUrl = url.searchParams.get("room");
     const nameFromUrl = url.searchParams.get("name");
 
     if (roomFromUrl && nameFromUrl) {
-      return { lobbyCode: roomFromUrl.toUpperCase(), playerName: nameFromUrl };
+      setConnectionStatus(`Rejoining ${roomFromUrl}...`);
+      joinChannel(roomFromUrl.toUpperCase(), nameFromUrl, false);
+      return;
     }
 
     try {
@@ -144,179 +287,12 @@ export function GameProvider({ children }: { children: ReactNode }) {
       if (data) {
         const session = JSON.parse(data);
         if (Date.now() - session.timestamp < 2 * 60 * 60 * 1000) {
-          return session;
+          setConnectionStatus(`Rejoining ${session.lobbyCode}...`);
+          joinChannel(session.lobbyCode, session.playerName, false);
         }
       }
     } catch {}
-    return null;
-  }, []);
-
-  // Initialize socket
-  useEffect(() => {
-    // In production, connect to the WebSocket server URL
-    // In development, connect to the same host
-    const wsUrl = process.env.NEXT_PUBLIC_WS_URL || undefined;
-    
-    const newSocket = io(wsUrl, {
-      reconnection: true,
-      reconnectionAttempts: 10,
-      reconnectionDelay: 1000,
-      reconnectionDelayMax: 5000,
-      timeout: 20000,
-      transports: ["websocket", "polling"],
-    });
-
-    setSocket(newSocket);
-
-    newSocket.on("connect", () => {
-      setIsConnected(true);
-      setConnectionStatus(null);
-
-      // Try to rejoin
-      const session = loadSession();
-      if (session) {
-        setConnectionStatus(`Reconnecting to ${session.lobbyCode}...`);
-        newSocket.emit("rejoin-lobby", {
-          code: session.lobbyCode,
-          playerName: session.playerName,
-        });
-      }
-    });
-
-    newSocket.on("disconnect", () => {
-      setIsConnected(false);
-      setConnectionStatus("Connection lost. Reconnecting...");
-    });
-
-    newSocket.on("reconnect_attempt", (attemptNumber) => {
-      setConnectionStatus(`Reconnecting... (attempt ${attemptNumber})`);
-    });
-
-    newSocket.on("reconnect_failed", () => {
-      setConnectionStatus("Connection failed. Please refresh the page.");
-    });
-
-    newSocket.on("error", (message: string) => {
-      setError(message);
-      setTimeout(() => setError(null), 3000);
-    });
-
-    newSocket.on("lobby-created", ({ code, players }) => {
-      setLobbyCode(code);
-      setPlayers(players);
-      setIsHost(true);
-      setGameState("waiting");
-    });
-
-    newSocket.on("lobby-joined", ({ code, players }) => {
-      setLobbyCode(code);
-      setPlayers(players);
-      setIsHost(false);
-      setGameState("waiting");
-    });
-
-    newSocket.on(
-      "rejoin-success",
-      ({ code, players, state, isHost: hostStatus }) => {
-        setLobbyCode(code);
-        setPlayers(players);
-        setIsHost(hostStatus);
-        setGameState(state);
-        setConnectionStatus(null);
-      }
-    );
-
-    newSocket.on("rejoin-failed", () => {
-      setConnectionStatus(null);
-      clearSession();
-    });
-
-    newSocket.on("player-joined", ({ players }) => {
-      setPlayers(players);
-    });
-
-    newSocket.on("player-left", ({ players }) => {
-      setPlayers(players);
-      // Check if we became host
-      const me = players.find((p: Player) => p.name === myName);
-      if (me?.isHost && !isHost) {
-        setIsHost(true);
-      }
-    });
-
-    newSocket.on("game-started", (data: GameStartedPayload) => {
-      setGameState("playing");
-      setCategory(data.category);
-      setSecretWord(data.secretWord);
-      setAllWords(data.allWords);
-      setIsChameleon(data.isChameleon);
-      setPlayerOrder(data.playerOrder);
-      setCurrentPlayer(data.currentPlayer);
-      setClues(
-        data.playerOrder.map((p) => ({ id: p.id, name: p.name, clue: null }))
-      );
-      setGameResults(null);
-      setGuessPhaseData(null);
-    });
-
-    newSocket.on("next-player", ({ currentPlayer }) => {
-      setCurrentPlayer(currentPlayer);
-    });
-
-    newSocket.on("clue-submitted", ({ playerId, clue }) => {
-      setClues((prev) =>
-        prev.map((c) => (c.id === playerId ? { ...c, clue } : c))
-      );
-    });
-
-    newSocket.on("voting-phase", (data: VotingPhasePayload) => {
-      setGameState("voting");
-      setClues(data.clues.map((c) => ({ ...c, clue: c.clue })));
-      setSelectedVote(null);
-      setVotesCount(0);
-    });
-
-    newSocket.on("vote-cast", ({ votesCount }) => {
-      setVotesCount(votesCount);
-    });
-
-    newSocket.on(
-      "chameleon-guess-phase",
-      (data: ChameleonGuessPhasePayload) => {
-        setGameState("chameleon-guessing");
-        setGuessPhaseData(data);
-      }
-    );
-
-    newSocket.on("game-results", (data: GameResultsPayload) => {
-      setGameState("results");
-      setGameResults(data);
-    });
-
-    newSocket.on("reset-lobby", ({ players }) => {
-      setPlayers(players);
-      setGameState("waiting");
-      setCategory("");
-      setSecretWord(null);
-      setAllWords([]);
-      setIsChameleon(false);
-      setPlayerOrder([]);
-      setCurrentPlayer(null);
-      setClues([]);
-      setGameResults(null);
-      setGuessPhaseData(null);
-    });
-
-    newSocket.on("game-interrupted", ({ reason, players }) => {
-      setError(`Game ended: ${reason}`);
-      setPlayers(players);
-      setGameState("waiting");
-    });
-
-    return () => {
-      newSocket.close();
-    };
-  }, []);
+  }, [myId, joinChannel]);
 
   // Save session when lobby code or name changes
   useEffect(() => {
@@ -326,85 +302,169 @@ export function GameProvider({ children }: { children: ReactNode }) {
   }, [lobbyCode, myName, saveSession]);
 
   // Actions
-  const createLobby = useCallback(
-    (name: string) => {
-      setMyName(name);
-      socket?.emit("create-lobby", name);
-    },
-    [socket]
-  );
+  const createLobby = useCallback((name: string) => {
+    const code = generateLobbyCode();
+    joinChannel(code, name, true);
+  }, [joinChannel]);
 
-  const joinLobby = useCallback(
-    (code: string, name: string) => {
-      setMyName(name);
-      socket?.emit("join-lobby", {
-        code: code.toUpperCase(),
-        playerName: name,
-      });
-    },
-    [socket]
-  );
+  const joinLobby = useCallback((code: string, name: string) => {
+    joinChannel(code.toUpperCase(), name, false);
+  }, [joinChannel]);
 
   const leaveLobby = useCallback(() => {
-    socket?.emit("leave-lobby", lobbyCode);
+    if (channelRef.current) {
+      supabase.removeChannel(channelRef.current);
+      channelRef.current = null;
+    }
     clearSession();
     setLobbyCode("");
     setPlayers([]);
     setIsHost(false);
-    setGameState("waiting");
-  }, [socket, lobbyCode, clearSession]);
+    setIsConnected(false);
+    setGamePhase("waiting");
+  }, [clearSession]);
 
   const startGame = useCallback(() => {
-    socket?.emit("start-game", lobbyCode);
-  }, [socket, lobbyCode]);
+    if (!isHost || players.length < 3) return;
 
-  const submitClue = useCallback(
-    (clue: string) => {
-      socket?.emit("submit-clue", { code: lobbyCode, clue });
-    },
-    [socket, lobbyCode]
-  );
+    const gameData = startGameRound(players);
+    
+    channelRef.current?.send({
+      type: "broadcast",
+      event: "game-start",
+      payload: gameData,
+    });
+  }, [isHost, players]);
+
+  const submitClue = useCallback((clue: string) => {
+    if (currentPlayerId !== myId) return;
+
+    const nextIndex = currentPlayerIndex + 1;
+    const allCluesSubmitted = nextIndex >= players.length;
+
+    channelRef.current?.send({
+      type: "broadcast",
+      event: "clue-submitted",
+      payload: { playerId: myId, clue, nextIndex },
+    });
+
+    if (allCluesSubmitted && isHost) {
+      // Gather all clues and transition to voting
+      const allClues = { ...clues, [myId]: clue };
+      setTimeout(() => {
+        channelRef.current?.send({
+          type: "broadcast",
+          event: "voting-phase",
+          payload: { clues: allClues },
+        });
+      }, 500);
+    }
+  }, [currentPlayerId, myId, currentPlayerIndex, players.length, isHost, clues]);
 
   const submitVote = useCallback(() => {
-    if (selectedVote) {
-      socket?.emit("submit-vote", {
-        code: lobbyCode,
-        votedPlayerId: selectedVote,
-      });
-    }
-  }, [socket, lobbyCode, selectedVote]);
+    if (!selectedVote) return;
 
-  const submitGuess = useCallback(
-    (guess: string) => {
-      socket?.emit("chameleon-guess", { code: lobbyCode, guess });
-    },
-    [socket, lobbyCode]
-  );
+    const newVotes = { ...votes, [myId]: selectedVote };
+    
+    channelRef.current?.send({
+      type: "broadcast",
+      event: "vote-submitted",
+      payload: { votes: newVotes },
+    });
+
+    // Check if all votes are in
+    if (Object.keys(newVotes).length >= players.length && isHost) {
+      setTimeout(() => {
+        const { mostVotedId, mostVotedName, voteCount, voteResults } = tallyVotes(newVotes, players);
+        const isChameleonCaught = mostVotedId === chameleonId;
+        const chameleonPlayer = players.find(p => p.id === chameleonId);
+
+        if (isChameleonCaught) {
+          // Give chameleon a chance to guess
+          channelRef.current?.send({
+            type: "broadcast",
+            event: "chameleon-guess-phase",
+            payload: {
+              chameleonId,
+              chameleonName: chameleonPlayer?.name || "Unknown",
+              allWords,
+              category,
+            },
+          });
+        } else {
+          // Chameleon escaped!
+          channelRef.current?.send({
+            type: "broadcast",
+            event: "game-results",
+            payload: {
+              chameleonId,
+              chameleonName: chameleonPlayer?.name || "Unknown",
+              secretWord,
+              caughtChameleon: false,
+              mostVotedId,
+              mostVotedName,
+              votes: voteResults,
+            },
+          });
+        }
+      }, 500);
+    }
+  }, [selectedVote, votes, myId, players, isHost, chameleonId, allWords, category, secretWord]);
+
+  const submitGuess = useCallback((guess: string) => {
+    if (myId !== chameleonId) return;
+
+    const guessCorrect = guess.toLowerCase().trim() === secretWord?.toLowerCase().trim();
+    const chameleonPlayer = players.find(p => p.id === chameleonId);
+
+    channelRef.current?.send({
+      type: "broadcast",
+      event: "game-results",
+      payload: {
+        chameleonId,
+        chameleonName: chameleonPlayer?.name || "Unknown",
+        secretWord,
+        caughtChameleon: true,
+        chameleonGuess: guess,
+        chameleonGuessedCorrectly: guessCorrect,
+        votes: Object.entries(votes).map(([casterId, targetId]) => ({
+          name: players.find(p => p.id === casterId)?.name || "Unknown",
+          votedFor: players.find(p => p.id === targetId)?.name || "Unknown",
+        })),
+      },
+    });
+  }, [myId, chameleonId, secretWord, players, votes]);
 
   const playAgain = useCallback(() => {
-    socket?.emit("play-again", lobbyCode);
-  }, [socket, lobbyCode]);
+    if (!isHost) return;
+
+    channelRef.current?.send({
+      type: "broadcast",
+      event: "play-again",
+      payload: {},
+    });
+  }, [isHost]);
 
   const clearError = useCallback(() => setError(null), []);
 
   return (
     <GameContext.Provider
       value={{
-        socket,
         isConnected,
         connectionStatus,
+        myId,
         myName,
         setMyName,
         isHost,
         isChameleon,
         lobbyCode,
         players,
-        gameState,
+        gamePhase,
         category,
         secretWord,
         allWords,
         playerOrder,
-        currentPlayer,
+        currentPlayerId,
         clues,
         votesCount,
         selectedVote,

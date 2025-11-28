@@ -12,7 +12,7 @@ function getInitials(name: string): string {
 }
 
 export default function LobbyScreen() {
-  const { lobbyCode, players, isHost, myName, startGame, leaveLobby } =
+  const { lobbyCode, players, isHost, myId, startGame, leaveLobby } =
     useGame();
   const canStart = players.length >= 3;
 
@@ -54,7 +54,7 @@ export default function LobbyScreen() {
                   HOST
                 </span>
               )}
-              {player.name === myName && (
+              {player.id === myId && (
                 <span className="text-xs px-2 py-1 rounded-full bg-green-400 text-gray-900 font-semibold ml-2">
                   YOU
                 </span>

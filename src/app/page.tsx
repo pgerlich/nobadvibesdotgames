@@ -8,13 +8,13 @@ import LobbyScreen from "@/components/LobbyScreen";
 import { useGame } from "@/contexts/GameContext";
 
 export default function Home() {
-  const { lobbyCode, gameState } = useGame();
+  const { lobbyCode, gamePhase } = useGame();
 
   const getScreen = () => {
     if (!lobbyCode) {
       return <HomeScreen />;
     }
-    if (gameState === "waiting") {
+    if (gamePhase === "waiting") {
       return <LobbyScreen />;
     }
     return <GameScreen />;

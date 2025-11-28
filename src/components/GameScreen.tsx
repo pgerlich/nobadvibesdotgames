@@ -1,7 +1,7 @@
 "use client";
 
 import { useGame } from "@/contexts/GameContext";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 function getInitials(name: string): string {
   return name
@@ -66,20 +66,29 @@ function RolePhase({ onReady }: { onReady: () => void }) {
 // Clue Phase
 function CluePhase() {
   const {
-    myName,
+    myId,
     category,
     secretWord,
     allWords,
     playerOrder,
-    currentPlayer,
+    currentPlayerId,
+    players,
     clues,
     submitClue,
-    isChameleon,
   } = useGame();
   const [clue, setClue] = useState("");
   const [hasSubmitted, setHasSubmitted] = useState(false);
 
-  const isMyTurn = currentPlayer?.name === myName;
+  const isMyTurn = currentPlayerId === myId;
+  const currentPlayerName = players.find(p => p.id === currentPlayerId)?.name || "...";
+
+  // Reset submission state when turn changes
+  useEffect(() => {
+    if (currentPlayerId === myId) {
+      setHasSubmitted(false);
+      setClue("");
+    }
+  }, [currentPlayerId, myId]);
 
   const handleSubmit = () => {
     if (clue.trim()) {
@@ -87,6 +96,16 @@ function CluePhase() {
       setHasSubmitted(true);
     }
   };
+
+  // Convert clues record to display format
+  const cluesList = playerOrder.map(playerId => {
+    const player = players.find(p => p.id === playerId);
+    return {
+      id: playerId,
+      name: player?.name || "Unknown",
+      clue: clues[playerId] || null,
+    };
+  });
 
   return (
     <div>
@@ -127,7 +146,7 @@ function CluePhase() {
         }`}
       >
         <h3 className="font-semibold mb-1">
-          {isMyTurn ? "🎯 Your Turn!" : `${currentPlayer?.name}'s turn`}
+          {isMyTurn ? "🎯 Your Turn!" : `${currentPlayerName}'s turn`}
         </h3>
         <p className="text-sm text-gray-400">
           {isMyTurn ? "Give your one-word clue!" : "Waiting for their clue..."}
@@ -160,14 +179,14 @@ function CluePhase() {
 
       <h4 className="text-gray-400 text-sm mb-3">Clues Given</h4>
       <ul className="space-y-2">
-        {clues.map((c) => (
+        {cluesList.map((c) => (
           <li
             key={c.id}
             className="flex items-center justify-between p-3 bg-gray-900 rounded-lg border border-gray-700"
           >
             <span className="font-medium">
               {c.name}
-              {c.name === myName && " (you)"}
+              {c.id === myId && " (you)"}
             </span>
             <span
               className={c.clue ? "text-emerald-300 italic" : "text-gray-500"}
@@ -184,9 +203,11 @@ function CluePhase() {
 // Voting Phase
 function VotePhase() {
   const {
+    myId,
     myName,
     clues,
     players,
+    playerOrder,
     selectedVote,
     setSelectedVote,
     submitVote,
@@ -198,6 +219,16 @@ function VotePhase() {
     submitVote();
     setHasVoted(true);
   };
+
+  // Convert clues to display format
+  const cluesList = playerOrder.map(playerId => {
+    const player = players.find(p => p.id === playerId);
+    return {
+      id: playerId,
+      name: player?.name || "Unknown",
+      clue: clues[playerId] || "(skipped)",
+    };
+  });
 
   return (
     <div>
@@ -213,7 +244,7 @@ function VotePhase() {
       </p>
 
       <div className="space-y-3 mb-6">
-        {clues.map((player) => (
+        {cluesList.map((player) => (
           <button
             key={player.id}
             onClick={() => !hasVoted && setSelectedVote(player.id)}
@@ -230,7 +261,7 @@ function VotePhase() {
             <div>
               <div className="font-medium">
                 {player.name}
-                {player.name === myName && " (you)"}
+                {player.id === myId && " (you)"}
               </div>
               <div className="text-emerald-300 text-sm">
                 &quot;{player.clue}&quot;
@@ -419,24 +450,26 @@ function ResultsPhase() {
 
 // Main Game Screen
 export default function GameScreen() {
-  const { gameState } = useGame();
+  const { gamePhase } = useGame();
   const [showRole, setShowRole] = useState(true);
 
-  // Reset role view when new game starts
-  if (gameState === "playing" && !showRole) {
-    // This will be handled by the component re-mounting
-  }
+  // Reset role view when game phase changes
+  useEffect(() => {
+    if (gamePhase === "playing") {
+      setShowRole(true);
+    }
+  }, [gamePhase]);
 
   return (
     <div className="flex flex-col items-center">
       <div className="card max-w-xl">
-        {gameState === "playing" && showRole && (
+        {gamePhase === "playing" && showRole && (
           <RolePhase onReady={() => setShowRole(false)} />
         )}
-        {gameState === "playing" && !showRole && <CluePhase />}
-        {gameState === "voting" && <VotePhase />}
-        {gameState === "chameleon-guessing" && <GuessPhase />}
-        {gameState === "results" && <ResultsPhase />}
+        {gamePhase === "playing" && !showRole && <CluePhase />}
+        {gamePhase === "voting" && <VotePhase />}
+        {gamePhase === "chameleon-guessing" && <GuessPhase />}
+        {gamePhase === "results" && <ResultsPhase />}
       </div>
     </div>
   );
