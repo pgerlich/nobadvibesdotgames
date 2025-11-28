@@ -1,8 +1,10 @@
+"use client";
+
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 
 let supabaseInstance: SupabaseClient | null = null;
 
-export function getSupabase(): SupabaseClient {
+function getSupabase(): SupabaseClient {
   if (supabaseInstance) {
     return supabaseInstance;
   }
@@ -11,9 +13,14 @@ export function getSupabase(): SupabaseClient {
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
   if (!supabaseUrl || !supabaseAnonKey) {
+    console.error("Missing Supabase environment variables:", {
+      url: !!supabaseUrl,
+      key: !!supabaseAnonKey,
+    });
     throw new Error("Missing Supabase environment variables");
   }
 
+  console.log("Creating Supabase client...");
   supabaseInstance = createClient(supabaseUrl, supabaseAnonKey, {
     realtime: {
       params: {
@@ -25,14 +32,16 @@ export function getSupabase(): SupabaseClient {
   return supabaseInstance;
 }
 
-// Lazy initialization - only creates client when actually used
-export const supabase = {
-  get channel() {
-    return getSupabase().channel.bind(getSupabase());
+// Proxy that lazily initializes the Supabase client
+export const supabase = new Proxy({} as SupabaseClient, {
+  get(_target, prop: string) {
+    const client = getSupabase();
+    const value = (client as any)[prop];
+    if (typeof value === "function") {
+      return value.bind(client);
+    }
+    return value;
   },
-  get removeChannel() {
-    return getSupabase().removeChannel.bind(getSupabase());
-  },
-};
+});
 
 export default supabase;
