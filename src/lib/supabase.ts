@@ -13,14 +13,9 @@ function getSupabase(): SupabaseClient {
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
   if (!supabaseUrl || !supabaseAnonKey) {
-    console.error("Missing Supabase environment variables:", {
-      url: !!supabaseUrl,
-      key: !!supabaseAnonKey,
-    });
     throw new Error("Missing Supabase environment variables");
   }
 
-  console.log("Creating Supabase client...");
   supabaseInstance = createClient(supabaseUrl, supabaseAnonKey, {
     realtime: {
       params: {

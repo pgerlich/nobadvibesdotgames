@@ -156,10 +156,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
   // Join a Supabase channel for the lobby
   const joinChannel = useCallback(
     (code: string, playerName: string, asHost: boolean) => {
-      console.log("[Game] joinChannel called:", { code, playerName, asHost, myId });
-      
       if (!myId) {
-        console.error("[Game] Cannot join channel - myId is empty");
         setError("Still loading, please try again");
         return;
       }
@@ -169,7 +166,6 @@ export function GameProvider({ children }: { children: ReactNode }) {
           supabase.removeChannel(channelRef.current);
         }
 
-        console.log("[Game] Creating Supabase channel:", `game:${code}`);
         const channel = supabase.channel(`game:${code}`, {
           config: {
             presence: { key: myId },
@@ -275,23 +271,19 @@ export function GameProvider({ children }: { children: ReactNode }) {
       });
 
       channel.subscribe(async (status) => {
-        console.log("[Game] Channel status:", status);
         if (status === "SUBSCRIBED") {
           setIsConnected(true);
           setConnectionStatus(null);
 
           // Track presence
-          console.log("[Game] Tracking presence:", { name: playerName, isHost: asHost });
           await channel.track({
             name: playerName,
             isHost: asHost,
           });
         } else if (status === "CHANNEL_ERROR") {
-          console.error("[Game] Channel error");
           setConnectionStatus("Connection error. Retrying...");
           setError("Failed to connect to game server");
         } else if (status === "TIMED_OUT") {
-          console.error("[Game] Channel timed out");
           setConnectionStatus("Connection timed out. Retrying...");
         }
       });
@@ -300,9 +292,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
       setLobbyCode(code);
       setIsHost(asHost);
       setMyName(playerName);
-      console.log("[Game] Lobby code set:", code);
       } catch (err) {
-        console.error("[Game] Error in joinChannel:", err);
+        console.error("Error joining channel:", err);
         setError("Failed to create lobby. Please try again.");
       }
     },
@@ -345,12 +336,10 @@ export function GameProvider({ children }: { children: ReactNode }) {
   // Actions
   const createLobby = useCallback(
     (name: string) => {
-      console.log("[Game] createLobby called:", { name, myId });
       const code = generateLobbyCode();
-      console.log("[Game] Generated code:", code);
       joinChannel(code, name, true);
     },
-    [joinChannel, myId]
+    [joinChannel]
   );
 
   const joinLobby = useCallback(
